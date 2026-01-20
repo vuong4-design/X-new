@@ -17,6 +17,13 @@ NSDictionary* getJsonBody(GCDWebServerDataRequest *request, NSError **jsonError)
                                                         options:kNilOptions
                                                             error:jsonError];
 }
+
+// Backward-compat helper: some call sites use `jsonObjectFromRequest`.
+// Keep a dedicated symbol (instead of relying on implicit declarations).
+static inline NSDictionary* jsonObjectFromRequest(GCDWebServerDataRequest *request, NSError **jsonError)
+{
+    return getJsonBody(request, jsonError);
+}
 NSMutableSet * getSet(GCDWebServerDataRequest *request, NSError *error) 
 {
     id jsonObject = [NSJSONSerialization JSONObjectWithData:request.data 
