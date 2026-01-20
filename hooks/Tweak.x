@@ -303,9 +303,6 @@ static char* hook_GSSystemGetSerialNo(void) {
     PXLog(@"ProjectX tweak initializing...");
 
     
-    %init(Identifiers);
-    
-    
     // Load saved settings and ensure synchronization
     [[NSUserDefaults standardUserDefaults] synchronize];
     
