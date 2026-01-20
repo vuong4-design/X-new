@@ -1,5 +1,6 @@
 #import "PXHookOptions.h"
 #import <CoreFoundation/CoreFoundation.h>
+#import <dispatch/dispatch.h>
 
 #if __has_include(<roothide.h>)
 #import <roothide.h>
@@ -12,6 +13,18 @@
 CFStringRef const kPXHookPrefsChangedNotification = CFSTR("com.projectx.hookprefs.changed");
 
 static NSDictionary *gPXPrefs = nil;
+
+// Dedicated lock for prefs access.
+// Do NOT synchronize on a class name (e.g. [PXHookOptions class]) because this
+// file is C-function based and may not declare such an Objective-C class.
+static NSObject *PXPrefsLock(void) {
+    static NSObject *lockObj = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        lockObj = [NSObject new];
+    });
+    return lockObj;
+}
 
 static NSString *PXPrefsPath(void) {
     return jbroot(@"/Library/MobileSubstrate/DynamicLibraries/ProjectXTweak.plist");
@@ -28,7 +41,7 @@ static void PXLoadPrefsLocked(void) {
 }
 
 void PXReloadHookPrefs(void) {
-    @synchronized([PXHookOptions class]) {
+    @synchronized(PXPrefsLock()) {
         PXLoadPrefsLocked();
     }
 }
