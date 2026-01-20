@@ -58,8 +58,9 @@ static CGSize parseResolution(NSString *resolutionString) {
     
     return CGSizeMake(width, height);
 }
-/** 这堆修改屏幕大小的功能会导致部分应用闪退 后续作为可选配置打开
+// 这堆修改屏幕大小的功能会导致部分应用闪退，后续作为可选配置打开
 #pragma mark - UIScreen Hooks
+
 %group PX_devicespec
 
 
@@ -196,7 +197,7 @@ static CGSize parseResolution(NSString *resolutionString) {
 }
 
 %end
-*/
+
 #pragma mark - NSProcessInfo Hooks
 
 %hook NSProcessInfo
