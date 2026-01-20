@@ -1,0 +1,71 @@
+name: Build iphoneos-arm
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: macos-14
+    env:
+      THEOS: ${{ github.workspace }}/theos
+      ARCHS: arm64
+      THEOS_PLATFORM: iphoneos
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          brew update
+          brew install ldid dpkg
+          echo "DPKG_BIN=$(brew --prefix dpkg)/libexec/dpkg" >> "$GITHUB_ENV"
+          echo "$(brew --prefix dpkg)/libexec/dpkg" >> "$GITHUB_PATH"
+
+      - name: Set up Theos
+        run: |
+          git clone --depth=1 https://github.com/theos/theos.git "$THEOS"
+          "$THEOS/bin/update-theos"
+          echo "$THEOS/bin" >> "$GITHUB_PATH"
+
+      - name: Install Theos SDKs
+        run: |
+          TMP_DIR="$(mktemp -d)"
+          git clone --depth=1 https://github.com/theos/sdks.git "$TMP_DIR/sdks"
+          mkdir -p "$THEOS/sdks"
+          cp -R "$TMP_DIR/sdks/"* "$THEOS/sdks/"
+          echo "THEOS_SDKS=$THEOS/sdks" >> "$GITHUB_ENV"
+          SDK_NAME="$(ls "$THEOS/sdks" | grep -E '^iPhoneOS[0-9]+\.[0-9]+\.sdk$' | sort -V | tail -n 1)"
+          SDK_VERSION="${SDK_NAME#iPhoneOS}"
+          SDK_VERSION="${SDK_VERSION%.sdk}"
+          echo "SDKVERSION=$SDK_VERSION" >> "$GITHUB_ENV"
+          echo "TARGET=iphone:clang:$SDK_VERSION:15.0" >> "$GITHUB_ENV"
+
+      - name: Install AltList headers and framework
+        run: |
+          bash scripts/setup_altlist.sh
+
+      - name: Ensure dm.pl is available
+        run: |
+          if ! command -v dm.pl >/dev/null; then
+            mkdir -p "$HOME/.local/bin"
+            curl -fsSL https://raw.githubusercontent.com/theos/theos/master/bin/dm.pl -o "$HOME/.local/bin/dm.pl"
+            chmod +x "$HOME/.local/bin/dm.pl"
+            echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          fi
+
+      - name: Build
+        run: |
+          make package ARCHS="$ARCHS" SDKVERSION="$SDKVERSION" TARGET="$TARGET"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: projectx-build
+          path: |
+            packages/*.deb
+            .theos/obj/**/ProjectX.app
+            .theos/obj/**/ProjectXTweak.dylib
+            .theos/obj/**/ProjectXDaemon
+          if-no-files-found: warn

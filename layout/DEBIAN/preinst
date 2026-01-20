@@ -1,0 +1,20 @@
+#!/bin/sh
+
+# Simplified preinst script with Dopamine 2 compatibility
+
+# Detect jailbreak type
+if [ -f /Library/LaunchDaemons/wangmc.projectx.plist ]; then
+    JBPREFIX=""
+    launchctl bootout system /Library/LaunchDaemons/wangmc.projectx.plist || true
+elif [ -d "/var/jb" ]; then
+    JBPREFIX="/var/jb"
+    if [ -f /var/jb/Library/LaunchDaemons/wangmc.projectx.plist ]; then
+        launchctl bootout system /var/jb/Library/LaunchDaemons/wangmc.projectx.plist || true
+    fi
+else
+    JBPREFIX=""
+fi
+
+
+
+exit 0 

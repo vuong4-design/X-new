@@ -1,0 +1,26 @@
+hw.product
+hw.machine
+kern.osproductversion
+hw.ncpu
+sysctl.proc_translated
+hw.pagesize
+hw.model
+kern.boottime
+hw.memsize
+hw.logicalcpu_max
+hw.physicalcpu_max
+
+NXGetLocalArchInfo 获取CPU架构
+
+
+清理 prefernce
+
+
+启动时间和开机时间逻辑需要修改
+
+
+ProfileManager初始化读取所以备份到缓存 修改删除等都改缓存然后调用save方法将新缓存写入本地
+
+
+
+仅保留 Documents tmp Library Library/Caches Library/Preferences

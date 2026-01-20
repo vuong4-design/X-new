@@ -1,0 +1,20 @@
+#!/bin/sh
+
+# Extremely simplified prerm script to avoid dpkg interruption
+# Do nothing that might interrupt dpkg
+if [ -f /Library/LaunchDaemons/wangmc.projectx.plist ]; then
+    JBPREFIX=""
+    launchctl bootout system /Library/LaunchDaemons/wangmc.projectx.plist || true
+    cp "/Library/MobileSubstrate/DynamicLibraries/ProjectXTweak.plist" "/Library/ProjectXTweak.plist"
+elif [ -d "/var/jb" ]; then
+    JBPREFIX="/var/jb"
+    if [ -f /var/jb/Library/LaunchDaemons/wangmc.projectx.plist ]; then
+        launchctl bootout system /var/jb/Library/LaunchDaemons/wangmc.projectx.plist || true
+    fi
+    cp "/var/jb/Library/MobileSubstrate/DynamicLibraries/ProjectXTweak.plist" "/var/jb/Library/ProjectXTweak.plist"
+    # /var/jb/Library/MobileSubstrate/DynamicLibraries
+else
+    JBPREFIX=""
+    cp "/Library/MobileSubstrate/DynamicLibraries/ProjectXTweak.plist" "/Library/ProjectXTweak.plist"
+fi
+exit 0 
