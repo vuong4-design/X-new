@@ -2,7 +2,45 @@
 #import "HttpRequest.h"
 #import "DaemonApi.h"
 
+@interface DaemonApiManager ()
+- (id)requestWithMethod:(NSString *)method path:(NSString *)path data:(id)data;
+@end
+
 @implementation DaemonApiManager
+
+// MARK: - Internal sync request helper
+// The app UI sometimes needs a synchronous request (e.g. fetch hook options before rendering).
+// The project already provides daemonGET/daemonPOST async helpers. We wrap them here.
+- (id)requestWithMethod:(NSString *)method path:(NSString *)path data:(id)data {
+    if (![method isKindOfClass:[NSString class]] || ![path isKindOfClass:[NSString class]]) {
+        return nil;
+    }
+
+    __block id result = nil;
+    dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
+
+    if ([method.uppercaseString isEqualToString:@"GET"]) {
+        daemonGET(path, ^(id jsonResponse, NSError *error) {
+            if (!error) {
+                result = jsonResponse;
+            }
+            dispatch_semaphore_signal(semaphore);
+        });
+    } else if ([method.uppercaseString isEqualToString:@"POST"]) {
+        daemonPOST(path, data ?: @{}, ^(id jsonResponse, NSError *error) {
+            if (!error) {
+                result = jsonResponse;
+            }
+            dispatch_semaphore_signal(semaphore);
+        });
+    } else {
+        // Not needed currently; keep a safe fallback.
+        dispatch_semaphore_signal(semaphore);
+    }
+
+    dispatch_semaphore_wait(semaphore, DISPATCH_TIME_FOREVER);
+    return result;
+}
 + (instancetype)sharedManager {
     static DaemonApiManager *sharedManager = nil;
     static dispatch_once_t onceToken;
@@ -67,7 +105,6 @@
     dispatch_semaphore_t semaphore = dispatch_semaphore_create(0); // 创建信号量
     daemonGET(GET_PHONE_INFO,^(id jsonResponse, NSError *error) {
         if ([jsonResponse isKindOfClass:[NSDictionary class]]) {
-            NSDictionary *dict = (NSDictionary *)jsonResponse;
             phoneInfo = [PhoneInfo fromDictionary:jsonResponse];
         }
         dispatch_semaphore_signal(semaphore); 
