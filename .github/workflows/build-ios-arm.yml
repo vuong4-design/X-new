@@ -55,6 +55,9 @@ jobs:
             echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           fi
 
+      - name: Fix maintainer script permissions
+        run: chmod 755 layout/DEBIAN/preinst
+
       - name: Build
         run: |
           make package ARCHS="$ARCHS" SDKVERSION="$SDKVERSION" TARGET="$TARGET"
