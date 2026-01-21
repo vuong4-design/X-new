@@ -28,8 +28,9 @@ static NSObject *PXPrefsLock(void) {
 }
 
 static NSString * const kPXHookPrefsDomain = @"com.projectx.hookprefs";
-static NSString * const kPXHookPrefsGlobalKey = @"global";
-static NSString * const kPXHookPrefsPerAppKey = @"perApp";
+// Keep in sync with PXHookPrefsStore (common/PXHookPrefsStore.m)
+static NSString * const kPXHookPrefsGlobalKey = @"GlobalOptions";
+static NSString * const kPXHookPrefsPerAppKey = @"PerAppOptions";
 
 static NSDictionary *PXCopyPrefsSnapshot(void) {
     // Values are stored as individual keys in CFPreferences domain.
@@ -50,6 +51,19 @@ static NSDictionary *PXCopyPrefsSnapshot(void) {
             perAppAll = [(__bridge NSDictionary *)pVal copy];
         }
         CFRelease(pVal);
+    }
+
+    // Fallback: some setups write the plist directly (or CFPreferences cache is stale).
+    // If CFPreferences didn’t give us usable dictionaries, read the canonical file.
+    if (![global isKindOfClass:[NSDictionary class]] || ![perAppAll isKindOfClass:[NSDictionary class]]) {
+        NSString *path = jbroot("/var/mobile/Library/Preferences/com.projectx.hookprefs.plist");
+        NSDictionary *fileDict = [NSDictionary dictionaryWithContentsOfFile:path];
+        if ([fileDict isKindOfClass:[NSDictionary class]]) {
+            NSDictionary *g2 = fileDict[kPXHookPrefsGlobalKey];
+            NSDictionary *p2 = fileDict[kPXHookPrefsPerAppKey];
+            if ([g2 isKindOfClass:[NSDictionary class]]) global = g2;
+            if ([p2 isKindOfClass:[NSDictionary class]]) perAppAll = p2;
+        }
     }
 
     if (![global isKindOfClass:[NSDictionary class]]) global = @{};
@@ -86,7 +100,20 @@ static NSDictionary *PXPrefs(void) {
 BOOL PXHookEnabled(NSString *key) {
     if (key.length == 0) return YES;
 
-    NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier] ?: @"";
+    // IMPORTANT: do NOT use -[NSBundle bundleIdentifier] here.
+    // Many tweaks (including ours) can hook NSBundle methods. If we call the
+    // Objective-C selector, the returned bundle id can be spoofed (causing
+    // per-app matching to fail), or we can even trigger recursion/stack overflows
+    // when our own Identifier hooks are enabled.
+    // Use CoreFoundation APIs instead.
+    NSString *bundleID = @"";
+    CFBundleRef mainBundle = CFBundleGetMainBundle();
+    if (mainBundle) {
+        CFStringRef cfBid = CFBundleGetIdentifier(mainBundle);
+        if (cfBid) {
+            bundleID = [NSString stringWithString:(__bridge NSString *)cfBid];
+        }
+    }
     NSDictionary *prefs = PXPrefs();
 
     NSDictionary *global = prefs[kPXHookPrefsGlobalKey];
