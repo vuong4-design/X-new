@@ -24,7 +24,7 @@ static __thread BOOL px_sysctlbyname_in_hook = NO;
 
 %ctor {
     @autoreleasepool {
-        NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier];
+        NSString *bundleID = PXSafeBundleIdentifier();
         NSString *processName = [[NSProcessInfo processInfo] processName];
         PXLog(@"[DeviceModelHooks] ✅ loaded in process=%@ bundle=%@", processName, bundleID);
     }
@@ -50,7 +50,7 @@ static int hook_uname(struct utsname *buf) {
         return ret;
     }
     
-    NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier];
+    NSString *bundleID = PXSafeBundleIdentifier();
     if (!bundleID) {
         return ret; // Can't determine bundle ID, return original result
     }
@@ -106,7 +106,7 @@ static int hook_sysctlbyname(const char *name, void *oldp, size_t *oldlenp, void
     }
     px_sysctlbyname_in_hook = YES;
 
-    NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier];
+    NSString *bundleID = PXSafeBundleIdentifier();
     // if (isHWMachine || isHWModel || isOSVersion) {
         // Make a copy of the original value for logging purposes
     char originalValue[256] = "<not available>";
@@ -486,7 +486,7 @@ static int hook_sysctlbyname(const char *name, void *oldp, size_t *oldlenp, void
 
 - (NSString *)model {
     NSString *originalModel = %orig;
-    NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier];
+    NSString *bundleID = PXSafeBundleIdentifier();
     
     if (!bundleID) {
         return originalModel;
@@ -527,7 +527,7 @@ static int hook_sysctlbyname(const char *name, void *oldp, size_t *oldlenp, void
 
 - (NSString *)localizedModel {
     NSString *originalModel = %orig;
-    NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier];
+    NSString *bundleID = PXSafeBundleIdentifier();
     
     if (!bundleID) {
         return originalModel;
@@ -558,7 +558,7 @@ static int hook_sysctlbyname(const char *name, void *oldp, size_t *oldlenp, void
     if (url) {
         NSString *urlStr = [url absoluteString];
         if ([urlStr containsString:@"device"] || [urlStr containsString:@"model"]) {
-            NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier];
+            NSString *bundleID = PXSafeBundleIdentifier();
             PXLog(@"[model] App %@ loaded dictionary with URL: %@", bundleID, urlStr);
         }
     }
@@ -581,7 +581,7 @@ static int hook_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, vo
         return -1;
     }
     // Get the bundle ID first to determine if we should spoof
-    NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier];
+    NSString *bundleID = PXSafeBundleIdentifier();
     if (!bundleID) {
         return orig_sysctl(name, namelen, oldp, oldlenp, newp, newlen);
     }

@@ -1,4 +1,5 @@
 #import "DataManager.h"
+#import "PXBundleIdentifier.h"
 #import "DaemonApiManager.h"
 #import "ProjectXLogging.h"
 
@@ -30,7 +31,7 @@
 }
 - (void) freshCacheData{
     _phoneInfo = [PhoneInfo loadFromPrefs];
-    NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier];
+    NSString *bundleID = PXSafeBundleIdentifier();
     if (!_phoneInfo) {
         PXLog(@"[DataManager] ⚠️ PhoneInfo is nil for bundle=%@", bundleID);
         return;

@@ -1,4 +1,5 @@
 #import "AppScopeManager.h"
+#import "PXBundleIdentifier.h"
 #if __has_include(<roothide.h>)
 #import <roothide.h>
 #else
@@ -38,7 +39,7 @@
 }
 
 - (BOOL)isScope {
-    NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier];
+    NSString *bundleID = PXSafeBundleIdentifier();
     if (!bundleID) return NO;
     
     

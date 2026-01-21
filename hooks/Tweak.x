@@ -18,6 +18,7 @@
 #import <sys/utsname.h>
 #import <Security/Security.h>
 #import <CoreTelephony/CTTelephonyNetworkInfo.h>
+#import "PXBundleIdentifier.h"
 #import <CoreGraphics/CoreGraphics.h>
 #import <CoreMotion/CoreMotion.h> // Import CoreMotion framework for sensor spoofing
 #import "DataManager.h"
@@ -41,7 +42,7 @@
 // %hookf(NSString *, MGCopyAnswer, CFStringRef property) {
 //     PhoneInfo * phoneInfo = CurrentPhoneInfo();
 //     NSString *propertyString = (__bridge NSString *)property;
-//     NSString *currentBundleID = [[NSBundle mainBundle] bundleIdentifier];
+//     NSString *currentBundleID = PXSafeBundleIdentifier();
     
 //     PXLog(@"MGCopyAnswer requested for property: %@ by app: %@", propertyString, currentBundleID);
     
@@ -209,7 +210,7 @@ CFTypeRef hook_IORegistryEntryCreateCFProperty(io_registry_entry_t entry, CFStri
     @try {
  
         
-        NSString *currentBundleID = [[NSBundle mainBundle] bundleIdentifier];
+        NSString *currentBundleID = PXSafeBundleIdentifier();
         
         
         // Convert CoreFoundation key to NSString for easier handling
@@ -262,7 +263,7 @@ CFTypeRef hook_IORegistryEntryCreateCFProperty(io_registry_entry_t entry, CFStri
 static char* (*orig_GSSystemGetSerialNo)(void);
 
 static char* hook_GSSystemGetSerialNo(void) {
-    NSString *currentBundleID = [[NSBundle mainBundle] bundleIdentifier];
+    NSString *currentBundleID = PXSafeBundleIdentifier();
     
     PXLog(@"GSSystemGetSerialNo requested by app: %@", currentBundleID);
     

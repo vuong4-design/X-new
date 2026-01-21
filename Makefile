@@ -56,7 +56,7 @@ ProjectX_LDFLAGS += -F$(THEOS)/lib -weak_framework CoreLocationUI
 # Ensure app is installed to the correct location with proper permissions
 ProjectX_INSTALL_PATH = /Applications
 
-ProjectXDaemon_FILES = $(wildcard daemon/*.m) $(wildcard model/*.m) ./common/ProfileManager.m ./common/SettingManager.m ./common/ProjectXLogging.m
+ProjectXDaemon_FILES = $(wildcard daemon/*.m) $(wildcard model/*.m) ./common/ProfileManager.m ./common/SettingManager.m ./common/ProjectXLogging.m ./common/PXBundleIdentifier.m
 ProjectXDaemon_CFLAGS = -fobjc-arc -I./model -I./common -I./headers
 ProjectXDaemon_FRAMEWORKS = Foundation IOKit
 ProjectXDaemon_INSTALL_PATH = /usr/local/bin

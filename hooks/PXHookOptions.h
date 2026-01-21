@@ -1,5 +1,7 @@
 #import <Foundation/Foundation.h>
 
+#import "PXBundleIdentifier.h"
+
 NS_ASSUME_NONNULL_BEGIN
 
 /// Darwin notify name to reload tweak prefs at runtime.

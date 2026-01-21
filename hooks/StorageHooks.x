@@ -116,7 +116,7 @@ static void getStorageValuesForApp(uint64_t *totalBytes, uint64_t *freeBytes) {
         if (totalStorageGB <= 0) return;
         
         // Get app info for detection
-        NSString *currentBundleID = [[NSBundle mainBundle] bundleIdentifier];
+        NSString *currentBundleID = PXSafeBundleIdentifier();
         NSString *executablePath = [[NSBundle mainBundle] executablePath] ?: @"";
         NSString *appName = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleDisplayName"] ?: 
                            [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleName"] ?: @"";

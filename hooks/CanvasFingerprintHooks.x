@@ -63,7 +63,7 @@ static void addNoiseToImageData(NSMutableData *imageData, NSString *bundleID) {
 
 // Helper: Re-inject JS into all live WKWebViews
 static void reinjectFingerprintProtectionScriptToAllWKWebViews() {
-    NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier];
+    NSString *bundleID = PXSafeBundleIdentifier();
     // The JS string must match the one injected in WKWebView hook
     NSString *canvasProtectionScript =
         @"(function() {"
@@ -516,7 +516,7 @@ static void reinjectFingerprintProtectionScriptToAllWKWebViews() {
 // Method for getting pixel data
 - (NSData *)drawingData {
     NSData *originalData = %orig;
-    NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier];
+    NSString *bundleID = PXSafeBundleIdentifier();
     if (!bundleID || !originalData) {
         return originalData;
     }

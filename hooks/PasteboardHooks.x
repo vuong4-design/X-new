@@ -165,7 +165,7 @@ static BOOL hasPasteboardContentChanged(NSString *bundleID, UIPasteboard *pasteb
     UIPasteboard *original = %orig;
     
     @try {
-        NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier];
+        NSString *bundleID = PXSafeBundleIdentifier();
         // We don't need to do anything here, as uniquePasteboardUUID is hooked above
         // This override just ensures we're tracking all possible entry points
         PXLog(@"[WeaponX] 📋 Accessed general pasteboard from %@", bundleID);
@@ -217,7 +217,7 @@ static BOOL hasPasteboardContentChanged(NSString *bundleID, UIPasteboard *pasteb
     UIPasteboard *original = %orig;
     
     @try {
-        NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier];
+        NSString *bundleID = PXSafeBundleIdentifier();
         
         if (original) {
             // We intercept the uniquePasteboardUUID method above
@@ -274,7 +274,7 @@ static BOOL hasPasteboardContentChanged(NSString *bundleID, UIPasteboard *pasteb
     NSInteger originalCount = %orig;
     
     @try {
-        NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier];
+        NSString *bundleID = PXSafeBundleIdentifier();
         // Get our custom change count
         NSInteger spoofedCount = getCustomChangeCount(bundleID, originalCount);
         
@@ -297,7 +297,7 @@ static BOOL hasPasteboardContentChanged(NSString *bundleID, UIPasteboard *pasteb
 // Hook persistent property to prevent fingerprinting
 - (void)setPersistent:(BOOL)persistent {
     @try {
-        NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier];
+        NSString *bundleID = PXSafeBundleIdentifier();
         // Always allow pasteboard to be persistent to avoid crashes
         // but log the attempt to track fingerprinting
         PXLog(@"[WeaponX] 📋 App %@ trying to set pasteboard persistence: %@", 
@@ -316,7 +316,7 @@ static BOOL hasPasteboardContentChanged(NSString *bundleID, UIPasteboard *pasteb
     BOOL originalValue = %orig;
     
     @try {
-        NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier];
+        NSString *bundleID = PXSafeBundleIdentifier();
         // Always report persistent to avoid issues
         PXLog(@"[WeaponX] 📋 App %@ checking pasteboard persistence", bundleID);
         return YES;
@@ -332,7 +332,7 @@ static BOOL hasPasteboardContentChanged(NSString *bundleID, UIPasteboard *pasteb
     NSArray *originalProviders = %orig;
     
     @try {
-        NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier];
+        NSString *bundleID = PXSafeBundleIdentifier();
         
         if (originalProviders) {
             PXLog(@"[WeaponX] 📋 App %@ accessing pasteboard item providers (%lu items)", 
@@ -353,7 +353,7 @@ static BOOL hasPasteboardContentChanged(NSString *bundleID, UIPasteboard *pasteb
     NSArray *originalItemSet = %orig;
     
     @try {
-        NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier];
+        NSString *bundleID = PXSafeBundleIdentifier();
         
         if (originalItemSet) {
             PXLog(@"[WeaponX] 📋 App %@ accessing pasteboard items with preferred types: %@", 
@@ -373,7 +373,7 @@ static BOOL hasPasteboardContentChanged(NSString *bundleID, UIPasteboard *pasteb
     BOOL originalResult = %orig;
     
     @try {
-        NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier];
+        NSString *bundleID = PXSafeBundleIdentifier();
         
         if (pasteboardTypes) {
             // Log suspicious fingerprinting types
@@ -397,7 +397,7 @@ static BOOL hasPasteboardContentChanged(NSString *bundleID, UIPasteboard *pasteb
     id originalValue = %orig;
     
     @try {
-        NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier];
+        NSString *bundleID = PXSafeBundleIdentifier();
         
         if (pasteboardType) {
             // Check for device-specific or identity types
@@ -451,7 +451,7 @@ static BOOL hasPasteboardContentChanged(NSString *bundleID, UIPasteboard *pasteb
 // Hook data setter to monitor content changes and maintain our change count
 - (void)setData:(NSData *)data forPasteboardType:(NSString *)pasteboardType {
     @try {
-        NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier];
+        NSString *bundleID = PXSafeBundleIdentifier();
         // Increment our custom change count whenever content changes
         incrementCustomChangeCount(bundleID);
         PXLog(@"[WeaponX] 📋 App %@ setting pasteboard data for type: %@", bundleID, pasteboardType);
@@ -465,7 +465,7 @@ static BOOL hasPasteboardContentChanged(NSString *bundleID, UIPasteboard *pasteb
 // Hook items setter to monitor content changes
 - (void)setItems:(NSArray *)items {
     @try {
-        NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier];
+        NSString *bundleID = PXSafeBundleIdentifier();
         // Increment our custom change count whenever content changes
         incrementCustomChangeCount(bundleID);
         PXLog(@"[WeaponX] 📋 App %@ setting pasteboard items (%lu items)", 
@@ -493,7 +493,7 @@ static BOOL hasPasteboardContentChanged(NSString *bundleID, UIPasteboard *pasteb
             [name hasPrefix:@"UIPasteboard"] ||
             [name containsString:@"Pasteboard"]) {
             
-            NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier];
+            NSString *bundleID = PXSafeBundleIdentifier();
             // Let these through but log them for tracking fingerprinting
             PXLog(@"[WeaponX] 📋 Pasteboard notification: %@ in app %@", name, bundleID);
         }
@@ -511,7 +511,7 @@ static BOOL hasPasteboardContentChanged(NSString *bundleID, UIPasteboard *pasteb
 %ctor {
     @autoreleasepool {
         // Skip for system processes
-        NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier];
+        NSString *bundleID = PXSafeBundleIdentifier();
         
         PXLog(@"[WeaponX] 📋 Initialized PasteboardHooks for %@", bundleID);
     }

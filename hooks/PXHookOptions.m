@@ -30,6 +30,16 @@ static NSString *PXPrefsPath(void) {
     return jbroot(@"/Library/MobileSubstrate/DynamicLibraries/ProjectXTweak.plist");
 }
 
+// Resolve the current process bundle identifier as early and reliably as possible.
+// When a dylib is injected very early, `-[NSBundle mainBundle] bundleIdentifier`
+// can sometimes be empty temporarily. CFBundleGetIdentifier is typically available
+// earlier.
+NSString *PXCurrentBundleIdentifier(void) {
+    // Backwards-compatible wrapper used by older code paths.
+    // Use the shared helper so callers always get a non-nil value.
+    return PXSafeBundleIdentifier();
+}
+
 static void PXLoadPrefsLocked(void) {
     NSString *path = PXPrefsPath();
     NSDictionary *dict = [NSDictionary dictionaryWithContentsOfFile:path];
@@ -56,7 +66,7 @@ static NSDictionary *PXPrefs(void) {
 BOOL PXHookEnabled(NSString *key) {
     if (key.length == 0) return YES;
 
-    NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier] ?: @"";
+	NSString *bundleID = PXCurrentBundleIdentifier() ?: @"";
     NSDictionary *prefs = PXPrefs();
 
     NSDictionary *global = prefs[@"HookOptions"];
