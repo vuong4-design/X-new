@@ -124,8 +124,20 @@
 }
 
 - (NSDictionary *)loadHookOptions {
-    NSString *path = jbroot(@"/Library/MobileSubstrate/DynamicLibraries/ProjectXTweak.plist");
+    // Store hook options in user preferences so both the app UI and tweak can read the same data.
+    // NOTE: This is intentionally NOT the MobileSubstrate filter plist.
+    NSString *path = jbroot(@"/var/mobile/Library/Preferences/com.projectx.hookprefs.plist");
     NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:path];
+
+    // Backward-compat: if the new prefs file doesn't exist yet, try to read from the old location.
+    if (![prefs isKindOfClass:[NSDictionary class]]) {
+        NSString *legacyPath = jbroot(@"/Library/MobileSubstrate/DynamicLibraries/ProjectXTweak.plist");
+        NSDictionary *legacy = [NSDictionary dictionaryWithContentsOfFile:legacyPath];
+        if ([legacy isKindOfClass:[NSDictionary class]]) {
+            prefs = legacy;
+        }
+    }
+
     if (![prefs isKindOfClass:[NSDictionary class]]) return @{};
 
     NSDictionary *global = prefs[@"HookOptions"];
@@ -140,11 +152,10 @@
 - (void)saveHookOptions:(NSDictionary *)hookOptions {
     if (![hookOptions isKindOfClass:[NSDictionary class]]) return;
 
-    NSString *path = jbroot(@"/Library/MobileSubstrate/DynamicLibraries/ProjectXTweak.plist");
+    // Save to the dedicated prefs file used by the tweak.
+    NSString *path = jbroot(@"/var/mobile/Library/Preferences/com.projectx.hookprefs.plist");
     NSMutableDictionary *prefs = [NSMutableDictionary dictionaryWithContentsOfFile:path];
-    if (![prefs isKindOfClass:[NSMutableDictionary class]]) {
-        prefs = [NSMutableDictionary dictionary];
-    }
+    if (![prefs isKindOfClass:[NSMutableDictionary class]]) prefs = [NSMutableDictionary dictionary];
 
     NSDictionary *global = hookOptions[@"HookOptions"];
     NSDictionary *perApp = hookOptions[@"PerAppHookOptions"];
