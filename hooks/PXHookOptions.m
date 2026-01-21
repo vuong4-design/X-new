@@ -27,6 +27,18 @@ static NSObject *PXPrefsLock(void) {
 }
 
 static NSString *PXPrefsPath(void) {
+    // IMPORTANT:
+    // - Hook options (global defaults + per-app overrides) are stored/served by the daemon
+    //   via /var/mobile/Library/Preferences/com.projectx.hookprefs.plist.
+    // - /Library/MobileSubstrate/DynamicLibraries/ProjectXTweak.plist is used as the
+    //   MobileSubstrate filter list (Bundles) by the injection mechanism.
+    //
+    // We prefer the daemon prefs file, but keep a fallback to the legacy path to avoid
+    // breaking existing installs.
+    NSString *daemonPrefs = jbroot(@"/var/mobile/Library/Preferences/com.projectx.hookprefs.plist");
+    if ([[NSFileManager defaultManager] fileExistsAtPath:daemonPrefs]) {
+        return daemonPrefs;
+    }
     return jbroot(@"/Library/MobileSubstrate/DynamicLibraries/ProjectXTweak.plist");
 }
 
