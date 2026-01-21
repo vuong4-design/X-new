@@ -1,6 +1,7 @@
 #import "PXHookOptions.h"
 #import <CoreFoundation/CoreFoundation.h>
 #import <dispatch/dispatch.h>
+#import "PXHookKeys.h"
 
 #if __has_include(<roothide.h>)
 #import <roothide.h>
@@ -10,12 +11,13 @@
 #endif
 #endif
 
-// Daemon đang post notify này trong WebServerManager
 CFStringRef const kPXHookPrefsChangedNotification = CFSTR("com.projectx.hookprefs.changed");
 
 static NSDictionary *gPXPrefs = nil;
 
-// Dedicated lock object (không synchronize trên class chưa chắc tồn tại)
+// Dedicated lock for prefs access.
+// Do NOT synchronize on a class name (e.g. [PXHookOptions class]) because this
+// file is C-function based and may not declare such an Objective-C class.
 static NSObject *PXPrefsLock(void) {
     static NSObject *lockObj = nil;
     static dispatch_once_t onceToken;
@@ -25,33 +27,47 @@ static NSObject *PXPrefsLock(void) {
     return lockObj;
 }
 
-// ✅ IMPORTANT:
-// Daemon lưu HookOptions vào ProjectXTweak.plist (cùng file filter Bundles).
-// Vì vậy tweak cũng phải đọc từ đây.
-static NSString *PXPrefsPath(void) {
-    NSString *tweakPlist = jbroot(@"/Library/MobileSubstrate/DynamicLibraries/ProjectXTweak.plist");
-    if ([[NSFileManager defaultManager] fileExistsAtPath:tweakPlist]) {
-        return tweakPlist;
+static NSString * const kPXHookPrefsDomain = @"com.projectx.hookprefs";
+static NSString * const kPXHookPrefsGlobalKey = @"global";
+static NSString * const kPXHookPrefsPerAppKey = @"perApp";
+
+static NSDictionary *PXCopyPrefsSnapshot(void) {
+    // Values are stored as individual keys in CFPreferences domain.
+    CFPropertyListRef gVal = CFPreferencesCopyAppValue((CFStringRef)kPXHookPrefsGlobalKey, (CFStringRef)kPXHookPrefsDomain);
+    CFPropertyListRef pVal = CFPreferencesCopyAppValue((CFStringRef)kPXHookPrefsPerAppKey, (CFStringRef)kPXHookPrefsDomain);
+
+    NSDictionary *global = nil;
+    NSDictionary *perAppAll = nil;
+
+    if (gVal) {
+        if (CFGetTypeID(gVal) == CFDictionaryGetTypeID()) {
+            global = [(__bridge NSDictionary *)gVal copy];
+        }
+        CFRelease(gVal);
+    }
+    if (pVal) {
+        if (CFGetTypeID(pVal) == CFDictionaryGetTypeID()) {
+            perAppAll = [(__bridge NSDictionary *)pVal copy];
+        }
+        CFRelease(pVal);
     }
 
-    // Fallback legacy (nếu bạn từng dùng file prefs riêng)
-    NSString *legacy = jbroot(@"/var/mobile/Library/Preferences/com.projectx.hookprefs.plist");
-    return legacy;
-}
+    if (![global isKindOfClass:[NSDictionary class]]) global = @{};
+    if (![perAppAll isKindOfClass:[NSDictionary class]]) perAppAll = @{};
 
-// Backwards-compatible wrapper
-NSString *PXCurrentBundleIdentifier(void) {
-    return PXSafeBundleIdentifier();
+    // Merge defaults so missing keys are treated as YES.
+    NSDictionary *defaults = PXDefaultHookOptions();
+    NSMutableDictionary *mergedGlobal = [defaults mutableCopy];
+    [mergedGlobal addEntriesFromDictionary:global];
+
+    return @{
+        kPXHookPrefsGlobalKey: mergedGlobal,
+        kPXHookPrefsPerAppKey: perAppAll
+    };
 }
 
 static void PXLoadPrefsLocked(void) {
-    NSString *path = PXPrefsPath();
-    NSDictionary *dict = [NSDictionary dictionaryWithContentsOfFile:path];
-    if ([dict isKindOfClass:[NSDictionary class]]) {
-        gPXPrefs = dict;
-    } else {
-        gPXPrefs = @{};
-    }
+    gPXPrefs = PXCopyPrefsSnapshot();
 }
 
 void PXReloadHookPrefs(void) {
@@ -70,11 +86,11 @@ static NSDictionary *PXPrefs(void) {
 BOOL PXHookEnabled(NSString *key) {
     if (key.length == 0) return YES;
 
-    NSString *bundleID = PXCurrentBundleIdentifier() ?: @"";
+    NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier] ?: @"";
     NSDictionary *prefs = PXPrefs();
 
-    NSDictionary *global = prefs[@"HookOptions"];
-    NSDictionary *perAppAll = prefs[@"PerAppHookOptions"];
+    NSDictionary *global = prefs[kPXHookPrefsGlobalKey];
+    NSDictionary *perAppAll = prefs[kPXHookPrefsPerAppKey];
     NSDictionary *perApp = (bundleID.length && [perAppAll isKindOfClass:[NSDictionary class]]) ? perAppAll[bundleID] : nil;
 
     id v = nil;
@@ -88,7 +104,7 @@ BOOL PXHookEnabled(NSString *key) {
     if ([v isKindOfClass:[NSNumber class]]) {
         return [(NSNumber *)v boolValue];
     }
-    return YES; // default ON nếu không có config
+    return YES;
 }
 
 static void PXPrefsChanged(CFNotificationCenterRef center,
