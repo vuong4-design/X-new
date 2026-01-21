@@ -55,8 +55,16 @@ jobs:
             echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           fi
 
-      - name: Fix maintainer script permissions
-        run: chmod 755 layout/DEBIAN/preinst
+      - name: Fix DEBIAN maintainer script permissions
+        run: |
+          set -eux
+          if [ -d layout/DEBIAN ]; then
+            chmod 755 layout/DEBIAN/preinst  || true
+            chmod 755 layout/DEBIAN/postinst || true
+            chmod 755 layout/DEBIAN/prerm    || true
+            chmod 755 layout/DEBIAN/postrm   || true
+            chmod 755 layout/DEBIAN/config   || true
+          fi
 
       - name: Build
         run: |
