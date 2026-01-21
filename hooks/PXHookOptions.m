@@ -56,7 +56,7 @@ static NSDictionary *PXCopyPrefsSnapshot(void) {
     // Fallback: some setups write the plist directly (or CFPreferences cache is stale).
     // If CFPreferences didn’t give us usable dictionaries, read the canonical file.
     if (![global isKindOfClass:[NSDictionary class]] || ![perAppAll isKindOfClass:[NSDictionary class]]) {
-        NSString *path = jbroot("/var/mobile/Library/Preferences/com.projectx.hookprefs.plist");
+        NSString *path = jbroot(@"/var/mobile/Library/Preferences/com.projectx.hookprefs.plist");
         NSDictionary *fileDict = [NSDictionary dictionaryWithContentsOfFile:path];
         if ([fileDict isKindOfClass:[NSDictionary class]]) {
             NSDictionary *g2 = fileDict[kPXHookPrefsGlobalKey];
