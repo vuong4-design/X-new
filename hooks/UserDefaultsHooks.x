@@ -391,6 +391,8 @@ static BOOL PXLooksLikeUUIDString(NSString *s) {
 
 %end
 
+%end // <== BẠN CẦN THÊM DÒNG NÀY ĐỂ ĐÓNG KHỐI %group PX_userdefaults
+
 #pragma mark - Constructor
 
 %ctor {
