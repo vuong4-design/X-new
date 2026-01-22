@@ -14,30 +14,18 @@ typedef CFDictionaryRef (*MGCopyMultipleAnswersFn)(CFArrayRef properties, int op
 static MGCopyAnswerFn orig_MGCopyAnswer = NULL;
 static MGCopyMultipleAnswersFn orig_MGCopyMultipleAnswers = NULL;
 
-// Biến cờ để chống đệ quy (recursion guard)
-static __thread BOOL px_mg_in_hook = NO;
-
 #pragma mark - Helpers
 
-// Trả về một danh sách (NSSet) các key mà bạn muốn spoof.
-// Việc dùng NSSet và dispatch_once giúp tối ưu hiệu suất.
+// Giữ lại hàm getSpoofableKeys để quản lý các key cần fake một cách tập trung
 static NSSet<NSString *> *getSpoofableKeys() {
     static NSSet<NSString *> *keys = nil;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
         keys = [NSSet setWithArray:@[
-            @"ProductType",
-            @"MarketingName",
-            @"HWModelStr",
-            @"HardwareModel",
-            @"ProductVersion",
-            @"BuildVersion",
-            @"SerialNumber",
-            @"InternationalMobileEquipmentIdentity",
-            @"MobileEquipmentIdentifier",
-            @"UniqueDeviceID",
-            @"UniqueDeviceIDData",
-            @"UserAssignedDeviceName"
+            @"ProductType", @"MarketingName", @"HWModelStr", @"HardwareModel",
+            @"ProductVersion", @"BuildVersion", @"SerialNumber", 
+            @"InternationalMobileEquipmentIdentity", @"MobileEquipmentIdentifier",
+            @"UniqueDeviceID", @"UniqueDeviceIDData", @"UserAssignedDeviceName"
         ]];
     });
     return keys;
@@ -57,137 +45,89 @@ static CFDataRef PXCreateCFDataFromUUIDStringOrNULL(NSString *uuidString) {
     return CFDataCreate(kCFAllocatorDefault, (const UInt8 *)bytes, sizeof(uuid_t));
 }
 
+// Giữ nguyên hàm tạo giá trị fake
 static CFTypeRef PXCreateOverrideForMGKey(NSString *key) {
     PhoneInfo *info = CurrentPhoneInfo();
     if (!info) return NULL;
-
     DeviceModel *dm = info.deviceModel;
     IosVersion *iv = info.iosVersion;
-
-    // ---- Device model ----
-    if ([key isEqualToString:@"ProductType"])
-        return PXCreateCFStringOrNULL(dm.modelName);
-    if ([key isEqualToString:@"MarketingName"])
-        return PXCreateCFStringOrNULL(dm.name);
-    if ([key isEqualToString:@"HWModelStr"] || [key isEqualToString:@"HardwareModel"])
-        return PXCreateCFStringOrNULL(dm.hwModel);
-
-    // ---- iOS version ----
-    if ([key isEqualToString:@"ProductVersion"])
-        return PXCreateCFStringOrNULL(iv.version);
-    if ([key isEqualToString:@"BuildVersion"])
-        return PXCreateCFStringOrNULL(iv.build);
-
-    // ---- Identifiers ----
-    if ([key isEqualToString:@"SerialNumber"])
-        return PXCreateCFStringOrNULL(info.serialNumber);
-    if ([key isEqualToString:@"InternationalMobileEquipmentIdentity"])
-        return PXCreateCFStringOrNULL(info.IMEI);
-    if ([key isEqualToString:@"MobileEquipmentIdentifier"])
-        return PXCreateCFStringOrNULL(info.MEID);
-    if ([key isEqualToString:@"UniqueDeviceID"])
-        return PXCreateCFStringOrNULL(info.systemBootUUID);
-    if ([key isEqualToString:@"UniqueDeviceIDData"])
-        return PXCreateCFDataFromUUIDStringOrNULL(info.systemBootUUID);
-    if ([key isEqualToString:@"UserAssignedDeviceName"])
-        return PXCreateCFStringOrNULL(info.deviceName);
-
+    if ([key isEqualToString:@"ProductType"]) return PXCreateCFStringOrNULL(dm.modelName);
+    if ([key isEqualToString:@"MarketingName"]) return PXCreateCFStringOrNULL(dm.name);
+    if ([key isEqualToString:@"HWModelStr"] || [key isEqualToString:@"HardwareModel"]) return PXCreateCFStringOrNULL(dm.hwModel);
+    if ([key isEqualToString:@"ProductVersion"]) return PXCreateCFStringOrNULL(iv.version);
+    if ([key isEqualToString:@"BuildVersion"]) return PXCreateCFStringOrNULL(iv.build);
+    if ([key isEqualToString:@"SerialNumber"]) return PXCreateCFStringOrNULL(info.serialNumber);
+    if ([key isEqualToString:@"InternationalMobileEquipmentIdentity"]) return PXCreateCFStringOrNULL(info.IMEI);
+    if ([key isEqualToString:@"MobileEquipmentIdentifier"]) return PXCreateCFStringOrNULL(info.MEID);
+    if ([key isEqualToString:@"UniqueDeviceID"]) return PXCreateCFStringOrNULL(info.systemBootUUID);
+    if ([key isEqualToString:@"UniqueDeviceIDData"]) return PXCreateCFDataFromUUIDStringOrNULL(info.systemBootUUID);
+    if ([key isEqualToString:@"UserAssignedDeviceName"]) return PXCreateCFStringOrNULL(info.deviceName);
     return NULL;
 }
 
-#pragma mark - Hooks
+#pragma mark - Hooks (THE GOLDEN VERSION)
 
 static CFTypeRef hook_MGCopyAnswer(CFStringRef property) {
-    // Luôn kiểm tra con trỏ hàm gốc
     if (!orig_MGCopyAnswer) return NULL;
-    // Nếu property là NULL, gọi hàm gốc
-    if (!property) return orig_MGCopyAnswer(property);
+    if (!property || !PXHookEnabled(@"devicemodel")) {
+        return orig_MGCopyAnswer(property);
+    }
 
     NSString *key = (__bridge NSString *)property;
 
-    // QUAN TRỌNG: Nếu key không nằm trong danh sách cần fake,
-    // gọi hàm gốc và trả về ngay lập tức để tránh can thiệp.
-    if (![getSpoofableKeys() containsObject:key]) {
-        return orig_MGCopyAnswer(property);
-    }
-    
-    // Chỉ xử lý logic phức tạp cho các key chúng ta quan tâm
-    if (px_mg_in_hook) {
-        PXLog(@"[MobileGestalt] ⚠️ Re-entrant MGCopyAnswer, skipping for key: %@", key);
-        return orig_MGCopyAnswer(property);
-    }
-
-    if (!PXHookEnabled(@"devicemodel"))
-        return orig_MGCopyAnswer(property);
-
-    px_mg_in_hook = YES;
-    @autoreleasepool {
-        PXLog(@"[MobileGestalt] 🔍 MGCopyAnswer called for spoofable key: %@", key);
-        CFTypeRef override = PXCreateOverrideForMGKey(key);
-        if (override) {
-            PXLog(@"[MobileGestalt] 🎭 Spoofed %@ = %@", key, (__bridge id)override);
-            px_mg_in_hook = NO;
-            return override; // Trả về giá trị đã fake (retained)
+    // Chỉ khi key nằm trong danh sách cần fake, chúng ta mới xử lý
+    if ([getSpoofableKeys() containsObject:key]) {
+        // Bên trong khối này mới là logic của bạn
+        @autoreleasepool {
+            CFTypeRef override = PXCreateOverrideForMGKey(key);
+            if (override) {
+                PXLog(@"[MobileGestalt] 🎭 Spoofed %@ = %@", key, (__bridge id)override);
+                return override; // Retained
+            }
         }
-
-        PXLog(@"[MobileGestalt] ➡️ Pass-through for spoofable key %@", key);
-        CFTypeRef orig = orig_MGCopyAnswer(property);
-        px_mg_in_hook = NO;
-        return orig;
     }
+
+    // Với TẤT CẢ các key khác, gọi hàm gốc ngay lập tức
+    return orig_MGCopyAnswer(property);
 }
 
 static CFDictionaryRef hook_MGCopyMultipleAnswers(CFArrayRef properties, int options) {
-    if (!orig_MGCopyMultipleAnswers || !properties)
+    if (!orig_MGCopyMultipleAnswers || !properties || !PXHookEnabled(@"devicemodel")) {
         return orig_MGCopyMultipleAnswers ? orig_MGCopyMultipleAnswers(properties, options) : NULL;
-
-    if (!PXHookEnabled(@"devicemodel")) {
-        return orig_MGCopyMultipleAnswers(properties, options);
     }
+
+    // Luôn gọi hàm gốc trước để lấy kết quả ban đầu
+    CFDictionaryRef origDict = orig_MGCopyMultipleAnswers(properties, options);
+
+    // Tạo một bản sao có thể thay đổi
+    CFMutableDictionaryRef out =
+        origDict ? CFDictionaryCreateMutableCopy(kCFAllocatorDefault, 0, origDict)
+                 : CFDictionaryCreateMutable(kCFAllocatorDefault, 0,
+                    &kCFTypeDictionaryKeyCallBacks,
+                    &kCFTypeDictionaryValueCallBacks);
     
-    NSArray *requestedKeys = (__bridge NSArray *)properties;
-    NSSet *spoofableKeys = getSpoofableKeys();
-    BOOL shouldSpoof = NO;
-    for (NSString *key in requestedKeys) {
-        if ([spoofableKeys containsObject:key]) {
-            shouldSpoof = YES;
-            break;
-        }
-    }
-
-    // Nếu không có key nào cần fake, gọi hàm gốc ngay lập tức
-    if (!shouldSpoof) {
-        return orig_MGCopyMultipleAnswers(properties, options);
-    }
-
-    // Nếu có, tiếp tục xử lý logic
-    if (px_mg_in_hook)
-        return orig_MGCopyMultipleAnswers(properties, options);
-
-    px_mg_in_hook = YES;
+    // Chỉ duyệt qua các key chúng ta quan tâm
     @autoreleasepool {
-        CFDictionaryRef origDict = orig_MGCopyMultipleAnswers(properties, options);
-        CFMutableDictionaryRef out =
-            origDict ? CFDictionaryCreateMutableCopy(kCFAllocatorDefault, 0, origDict)
-                     : CFDictionaryCreateMutable(kCFAllocatorDefault, 0,
-                        &kCFTypeDictionaryKeyCallBacks,
-                        &kCFTypeDictionaryValueCallBacks);
-        
-        for (NSString *key in requestedKeys) {
+        NSSet *spoofableKeys = getSpoofableKeys();
+        CFIndex count = CFArrayGetCount(properties);
+        for (CFIndex i = 0; i < count; i++) {
+            CFStringRef keyRef = (CFStringRef)CFArrayGetValueAtIndex(properties, i);
+            if (!keyRef) continue;
+            NSString *key = (__bridge NSString *)keyRef;
+
             if ([spoofableKeys containsObject:key]) {
                 CFTypeRef override = PXCreateOverrideForMGKey(key);
                 if (override) {
                     PXLog(@"[MobileGestalt] 🎭 [Multi] %@ = %@", key, (__bridge id)override);
-                    CFDictionarySetValue(out, (__bridge CFStringRef)key, override);
+                    CFDictionarySetValue(out, keyRef, override);
                     CFRelease(override);
                 }
             }
         }
-        
-        if (origDict) CFRelease(origDict);
-        px_mg_in_hook = NO;
-        return out; // Trả về dictionary đã được sửa đổi (retained)
     }
+
+    if (origDict) CFRelease(origDict);
+    return out; // Retained
 }
 
 
@@ -209,7 +149,6 @@ static CFDictionaryRef hook_MGCopyMultipleAnswers(CFArrayRef properties, int opt
             MSHookFunction(a, (void *)hook_MGCopyAnswer, (void **)&orig_MGCopyAnswer);
             PXLog(@"[MobileGestalt] ✅ Hooked MGCopyAnswer");
         }
-
         if (m) {
             MSHookFunction(m, (void *)hook_MGCopyMultipleAnswers, (void **)&orig_MGCopyMultipleAnswers);
             PXLog(@"[MobileGestalt] ✅ Hooked MGCopyMultipleAnswers");
