@@ -74,12 +74,14 @@ static BOOL isUUIDKey(NSString *key) {
     NSString *lowercaseKey = [key lowercaseString];
     
     // Common UUID-related key patterns
+    // Keep this list *narrow*. Keys like "token" or "device" are too generic and
+    // can match app-specific preferences that are not UUIDs (e.g. Facebook), which
+    // can corrupt their stored data and crash later.
     NSArray *uuidPatterns = @[
         @"uuid", @"udid", @"deviceid", @"device-id", @"device_id",
         @"uniqueid", @"unique-id", @"unique_id", @"identifier",
-        @"vendorid", @"vendor-id", @"vendor_id", 
-        @"idfa", @"idfv", @"adid", @"advertisingid",
-        @"token", @"tracking", @"device"
+        @"vendorid", @"vendor-id", @"vendor_id",
+        @"idfa", @"idfv", @"adid", @"advertisingid"
     ];
     
     // Check for exact matches or suffixes
@@ -97,6 +99,19 @@ static BOOL isUUIDKey(NSString *key) {
                               options:NSRegularExpressionSearch].location != NSNotFound;
 }
 
+static BOOL PXLooksLikeUUIDString(NSString *s) {
+    if (![s isKindOfClass:[NSString class]]) return NO;
+    if (s.length == 36) {
+        return [[NSUUID alloc] initWithUUIDString:s] != nil;
+    }
+    if (s.length == 32) {
+        // 32 hex chars (no dashes)
+        NSCharacterSet *hexSet = [NSCharacterSet characterSetWithCharactersInString:@"0123456789abcdefABCDEF"];
+        return [[s stringByTrimmingCharactersInSet:hexSet] length] == 0;
+    }
+    return NO;
+}
+
 #pragma mark - NSUserDefaults Hooks
 %group PX_userdefaults
 
@@ -105,32 +120,65 @@ static BOOL isUUIDKey(NSString *key) {
 // TODO 这里貌似会让应用闪退
 // Base method for getting objects
 - (id)objectForKey:(NSString *)defaultName {
-    @try {        
-        if (isUUIDKey(defaultName)) {
-            NSString *spoofedUUID = CurrentPhoneInfo().userDefaultsUUID;
-            PXLog(@"[WeaponX] 🔍 Spoofing UserDefaults UUID for key '%@' with: %@", defaultName, spoofedUUID);
-            return spoofedUUID;
-        }
-        
-        // Process object and look for UUIDs inside it
+    @try {
         id originalValue = %orig;
-        if (
-            [originalValue isKindOfClass:[NSDictionary class]] || 
-            [originalValue isKindOfClass:[NSArray class]]) {
+        if (!isUUIDKey(defaultName) || !originalValue) {
+            // Not a UUID-like key, or no value -> do not interfere
+            return originalValue;
+        }
+
+        NSString *spoofedUUID = CurrentPhoneInfo().userDefaultsUUID;
+
+        // Only spoof when the original value is UUID-ish. Returning a string
+        // unconditionally can corrupt app state (e.g. if an app stores binary blobs).
+        if ([originalValue isKindOfClass:[NSString class]]) {
+            NSString *s = (NSString *)originalValue;
+            if (PXLooksLikeUUIDString(s)) {
+                PXLog(@"[WeaponX] 🔍 Spoofing UserDefaults UUID for key '%@' with: %@", defaultName, spoofedUUID);
+                return spoofedUUID;
+            }
+            return originalValue;
+        }
+
+        if ([originalValue isKindOfClass:[NSData class]]) {
+            NSData *d = (NSData *)originalValue;
+            if (d.length == 16) {
+                NSUUID *uuid = [[NSUUID alloc] initWithUUIDString:spoofedUUID];
+                if (uuid) {
+                    uuid_t bytes;
+                    [uuid getUUIDBytes:bytes];
+                    return [NSData dataWithBytes:bytes length:16];
+                }
+            }
+            return originalValue;
+        }
+
+        if ([originalValue isKindOfClass:[NSUUID class]]) {
+            NSUUID *uuid = [[NSUUID alloc] initWithUUIDString:spoofedUUID];
+            return uuid ?: originalValue;
+        }
+
+        // Only deep-process containers for UUID keys.
+        if ([originalValue isKindOfClass:[NSDictionary class]] || [originalValue isKindOfClass:[NSArray class]]) {
             return processDictionaryValues(originalValue);
         }
+        
+        return originalValue;
     } @catch (NSException *exception) {
-        // Just log and continue with original if there's an exception
         PXLog(@"[WeaponX] ⚠️ Exception in objectForKey hook: %@", exception);
+        return %orig;
     }
-    
-    return %orig;
 }
 
 // String-specific method
 - (NSString *)stringForKey:(NSString *)defaultName {
-    @try {        
-        if (isUUIDKey(defaultName)) {
+    NSString *origValue = %orig;
+    @try {
+        if (!origValue) return nil;
+        if (!isUUIDKey(defaultName)) return origValue;
+
+        // Only spoof if the stored value actually looks like a UUID
+        if (PXLooksLikeUUIDString(origValue)) {
             NSString *spoofedUUID = CurrentPhoneInfo().userDefaultsUUID;
             PXLog(@"[WeaponX] 🔍 Spoofing UserDefaults string UUID for key '%@' with: %@", defaultName, spoofedUUID);
             return spoofedUUID;
@@ -138,8 +186,8 @@ static BOOL isUUIDKey(NSString *key) {
     } @catch (NSException *exception) {
         PXLog(@"[WeaponX] ⚠️ Exception in stringForKey hook: %@", exception);
     }
-    
-    return %orig;
+
+    return origValue;
 }
 
 // Dictionary method - use our recursive processor for nested values
@@ -149,6 +197,11 @@ static BOOL isUUIDKey(NSString *key) {
     @try {        
         // Don't modify if not spoofing or if the dictionary is empty
         if (!originalDict || originalDict.count == 0) {
+            return originalDict;
+        }
+
+        // Only touch UUID-related keys to avoid corrupting app-managed preferences.
+        if (!isUUIDKey(defaultName)) {
             return originalDict;
         }
         
@@ -171,6 +224,11 @@ static BOOL isUUIDKey(NSString *key) {
             return originalArray;
         }
         
+        // Only touch UUID-related keys to avoid corrupting app-managed preferences.
+        if (!isUUIDKey(defaultName)) {
+            return originalArray;
+        }
+
         // Use our recursive processor to handle arrays containing dictionaries with UUIDs
         return processDictionaryValues(originalArray);
     } @catch (NSException *exception) {
@@ -181,36 +239,29 @@ static BOOL isUUIDKey(NSString *key) {
 
 - (NSData *)dataForKey:(NSString *)defaultName {
     @try {        
-        // Only handle data that might represent a UUID
-        if (isUUIDKey(defaultName)) {
-            NSString *spoofedUUID = CurrentPhoneInfo().userDefaultsUUID;
-            NSData *spoofedData = [spoofedUUID dataUsingEncoding:NSUTF8StringEncoding];
-            PXLog(@"[WeaponX] 🔍 Spoofing UserDefaults data UUID for key '%@'", defaultName);
-            return spoofedData;
-        }
-        
         NSData *originalData = %orig;
-        
-        // Check if the data might be a UUID (16 bytes)
-        if (originalData && originalData.length == 16) {
-            NSString *spoofedUUID = CurrentPhoneInfo().userDefaultsUUID;
-            
-            // Convert UUID string to 16-byte binary format
-            NSString *hexString = [[spoofedUUID stringByReplacingOccurrencesOfString:@"-" withString:@""] lowercaseString];
-            NSMutableData *binaryData = [NSMutableData dataWithCapacity:16];
-            
-            for (NSInteger i = 0; i < hexString.length; i += 2) {
-                NSString *hexByte = [hexString substringWithRange:NSMakeRange(i, 2)];
-                NSScanner *scanner = [NSScanner scannerWithString:hexByte];
-                unsigned int value;
-                [scanner scanHexInt:&value];
-                uint8_t byte = value;
-                [binaryData appendBytes:&byte length:1];
-            }
-            
-            PXLog(@"[WeaponX] 🔍 Spoofing potential binary UUID data for key '%@'", defaultName);
-            return binaryData;
+        if (!originalData) return nil;
+
+        // Only spoof binary UUIDs when the *key* is UUID-related.
+        if (!isUUIDKey(defaultName)) {
+            return originalData;
         }
+
+        // Spoof 16-byte UUID binary representation
+        if (originalData.length == 16) {
+            NSString *spoofedUUID = CurrentPhoneInfo().userDefaultsUUID;
+            NSUUID *uuid = [[NSUUID alloc] initWithUUIDString:spoofedUUID];
+            if (uuid) {
+                uuid_t bytes;
+                [uuid getUUIDBytes:bytes];
+                NSData *spoofedData = [NSData dataWithBytes:bytes length:16];
+                PXLog(@"[WeaponX] 🔍 Spoofing binary UUID data for key '%@'", defaultName);
+                return spoofedData;
+            }
+        }
+
+        // Otherwise, keep original data. Some apps store non-UUID payloads here.
+        return originalData;
     } @catch (NSException *exception) {
         PXLog(@"[WeaponX] ⚠️ Exception in dataForKey hook: %@", exception);
     }
@@ -312,33 +363,24 @@ static BOOL isUUIDKey(NSString *key) {
 // Data-specific setter
 - (void)setData:(NSData *)value forKey:(NSString *)defaultName {
     @try {
-        
+        // Only spoof for UUID-related keys. Do not tamper with arbitrary blobs.
         if (isUUIDKey(defaultName) && value) {
             NSString *spoofedUUID = CurrentPhoneInfo().userDefaultsUUID;
-            NSData *spoofedData = [spoofedUUID dataUsingEncoding:NSUTF8StringEncoding];
-            PXLog(@"[WeaponX] 🔍 Intercepting and spoofing data UUID being saved to UserDefaults for key '%@'", defaultName);
-            return %orig(spoofedData, defaultName);
-        }
-        
-        // If the data looks like a UUID (16 bytes), replace it
-        if (value && value.length == 16) {
-            NSString *spoofedUUID = CurrentPhoneInfo().userDefaultsUUID;
-            
-            // Convert UUID string to 16-byte binary format
-            NSString *hexString = [[spoofedUUID stringByReplacingOccurrencesOfString:@"-" withString:@""] lowercaseString];
-            NSMutableData *binaryData = [NSMutableData dataWithCapacity:16];
-            
-            for (NSInteger i = 0; i < hexString.length; i += 2) {
-                NSString *hexByte = [hexString substringWithRange:NSMakeRange(i, 2)];
-                NSScanner *scanner = [NSScanner scannerWithString:hexByte];
-                unsigned int value;
-                [scanner scanHexInt:&value];
-                uint8_t byte = value;
-                [binaryData appendBytes:&byte length:1];
+            NSUUID *uuid = [[NSUUID alloc] initWithUUIDString:spoofedUUID];
+            if (uuid && value.length == 16) {
+                uuid_t bytes;
+                [uuid getUUIDBytes:bytes];
+                NSData *spoofedData = [NSData dataWithBytes:bytes length:16];
+                PXLog(@"[WeaponX] 🔍 Spoofing 16-byte UUID data being saved to UserDefaults for key '%@'", defaultName);
+                return %orig(spoofedData, defaultName);
             }
-            
-            PXLog(@"[WeaponX] 🔍 Spoofing potential binary UUID data being saved for key '%@'", defaultName);
-            return %orig(binaryData, defaultName);
+
+            // Fallback: if the app stores UUID as UTF-8 string data
+            if (PXLooksLikeUUIDString(spoofedUUID)) {
+                NSData *spoofedData = [spoofedUUID dataUsingEncoding:NSUTF8StringEncoding];
+                PXLog(@"[WeaponX] 🔍 Spoofing string UUID data being saved to UserDefaults for key '%@'", defaultName);
+                return %orig(spoofedData, defaultName);
+            }
         }
     } @catch (NSException *exception) {
         PXLog(@"[WeaponX] ⚠️ Exception in setData:forKey: hook: %@", exception);
@@ -353,16 +395,9 @@ static BOOL isUUIDKey(NSString *key) {
 
 %ctor {
     @autoreleasepool {
-        // Skip for system processes
-        PXLog(@"[WeaponX] 🔍 UserDefaults hooks initialized");
-        %init;
-    }
-} 
-
-%end
-
-%ctor {
-    if (PXHookEnabled(@"userdefaults")) {
-        %init(PX_userdefaults);
+        if (PXHookEnabled(@"userdefaults")) {
+            PXLog(@"[WeaponX] 🔍 UserDefaults hooks initialized");
+            %init(PX_userdefaults);
+        }
     }
 }
