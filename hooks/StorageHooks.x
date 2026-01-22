@@ -538,7 +538,7 @@ static CFTypeRef replaced_IORegistryEntryCreateCFProperty(io_registry_entry_t en
     
     return result;
 }
-%group PX_storage
+%group PX_storage_nsfile
 
 
 %hook NSFileManager
@@ -657,6 +657,10 @@ static CFTypeRef replaced_IORegistryEntryCreateCFProperty(io_registry_entry_t en
 
 %end
 
+%end
+
+%group PX_storage_nsurl
+
 %hook NSURL
 
 // Hook NSURL's getResourceValue:forKey:error: method for iOS 15+ compatibility
@@ -772,78 +776,63 @@ static CFTypeRef replaced_IORegistryEntryCreateCFProperty(io_registry_entry_t en
 
 %end
 
-// Setup hooks - Use %ctor for constructor, runs when module loads
+%end
+
+#pragma mark - Initialization
+
+// Storage hook test branches:
+// 1 = NSFileManager-only
+// 2 = NSURL-only
+// 3 = POSIX/statfs-only
+#ifndef PX_STORAGE_BRANCH
+#define PX_STORAGE_BRANCH 1
+#endif
+
 %ctor {
     @autoreleasepool {
         if (!PXHookEnabled(@"storage")) {
+            PXLog(@"[StorageHook] Disabled by prefs");
             return;
         }
-        @try {
-            PXLog(@"[StorageHooks] App is scoped, setting up storage hooks");
-            
-            // Hook statfs
-            void *handle = dlopen(NULL, RTLD_GLOBAL);
-            
-            if (handle) {
-                orig_statfs = dlsym(handle, "statfs");
-                if (orig_statfs) {
-                    MSHookFunction((void *)orig_statfs, (void *)replaced_statfs, (void **)&orig_statfs);
-                    PXLog(@"[StorageHooks] Hooked statfs successfully");
-                }
-                
-                // Hook statfs64 (if available)
-                orig_statfs64 = dlsym(handle, "statfs64");
-                if (orig_statfs64) {
-                    MSHookFunction((void *)orig_statfs64, (void *)replaced_statfs64, (void **)&orig_statfs64);
-                    PXLog(@"[StorageHooks] Hooked statfs64 successfully");
-                }
-                
-                // Hook getfsstat
-                orig_getfsstat = dlsym(handle, "getfsstat");
-                if (orig_getfsstat) {
-                    MSHookFunction((void *)orig_getfsstat, (void *)replaced_getfsstat, (void **)&orig_getfsstat);
-                    PXLog(@"[StorageHooks] Hooked getfsstat successfully");
-                }
-                
-                // Hook getfsstat64 (if available)
-                orig_getfsstat64 = dlsym(handle, "getfsstat64");
-                if (orig_getfsstat64) {
-                    MSHookFunction((void *)orig_getfsstat64, (void *)replaced_getfsstat64, (void **)&orig_getfsstat64);
-                    PXLog(@"[StorageHooks] Hooked getfsstat64 successfully");
-                }
-                
-                dlclose(handle);
+
+        PXLog(@"[StorageHook] Initializing (branch=%d)", PX_STORAGE_BRANCH);
+
+        if (PX_STORAGE_BRANCH == 1) {
+            %init(PX_storage_nsfile);
+            PXLog(@"[StorageHook] Enabled NSFileManager hooks only");
+        } else if (PX_STORAGE_BRANCH == 2) {
+            %init(PX_storage_nsurl);
+            PXLog(@"[StorageHook] Enabled NSURL hooks only");
+        } else if (PX_STORAGE_BRANCH == 3) {
+            // POSIX/statfs hooks only
+            void *statfsPtr = dlsym(RTLD_DEFAULT, "statfs");
+            if (statfsPtr) {
+                MSHookFunction(statfsPtr, (void *)hooked_statfs, (void **)&orig_statfs);
+                PXLog(@"[StorageHook] Hooked statfs");
             }
-            
-            // Hook IOKit functions
-            void *ioKitHandle = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY);
-            if (ioKitHandle) {
-                // Get the function pointer for IORegistryEntryCreateCFProperty
-                void *ioRegEntryCreateCFPropertyPtr = dlsym(ioKitHandle, "IORegistryEntryCreateCFProperty");
-                
-                if (ioRegEntryCreateCFPropertyPtr) {
-                    MSHookFunction(ioRegEntryCreateCFPropertyPtr, (void *)replaced_IORegistryEntryCreateCFProperty, (void **)&orig_IORegistryEntryCreateCFProperty);
-                    PXLog(@"[StorageHooks] Hooked IORegistryEntryCreateCFProperty successfully");
-                }
-                
-                dlclose(ioKitHandle);
+            void *statfs64Ptr = dlsym(RTLD_DEFAULT, "statfs64");
+            if (statfs64Ptr) {
+                MSHookFunction(statfs64Ptr, (void *)hooked_statfs64, (void **)&orig_statfs64);
+                PXLog(@"[StorageHook] Hooked statfs64");
             }
-            
-            // Initialize Objective-C hooks for scoped apps only
-            %init;
-            
-            PXLog(@"[StorageHooks] Storage hooks successfully initialized for scoped app");
-            
-        } @catch (NSException *e) {
-            PXLog(@"[StorageHooks] ❌ Exception in constructor: %@", e);
+            void *fstatfsPtr = dlsym(RTLD_DEFAULT, "fstatfs");
+            if (fstatfsPtr) {
+                MSHookFunction(fstatfsPtr, (void *)hooked_fstatfs, (void **)&orig_fstatfs);
+                PXLog(@"[StorageHook] Hooked fstatfs");
+            }
+            void *getfsstatPtr = dlsym(RTLD_DEFAULT, "getfsstat");
+            if (getfsstatPtr) {
+                MSHookFunction(getfsstatPtr, (void *)hooked_getfsstat, (void **)&orig_getfsstat);
+                PXLog(@"[StorageHook] Hooked getfsstat");
+            }
+            void *getfsstat64Ptr = dlsym(RTLD_DEFAULT, "getfsstat64");
+            if (getfsstat64Ptr) {
+                MSHookFunction(getfsstat64Ptr, (void *)hooked_getfsstat64, (void **)&orig_getfsstat64);
+                PXLog(@"[StorageHook] Hooked getfsstat64");
+            }
+            PXLog(@"[StorageHook] Enabled POSIX/statfs hooks only");
+        } else {
+            PXLog(@"[StorageHook] Unknown branch value: %d (nothing enabled)", PX_STORAGE_BRANCH);
         }
-    }
-} 
-
-%end
-
-%ctor {
-    if (PXHookEnabled(@"storage")) {
-        %init(PX_storage);
     }
 }
