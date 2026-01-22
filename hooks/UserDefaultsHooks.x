@@ -446,6 +446,8 @@ static void PXLogTypeMismatch(NSString *api, NSString *key, id value) {
 
 %end
 
+%end
+
 #pragma mark - Constructor
 
 %ctor {
