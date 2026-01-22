@@ -3,6 +3,7 @@
 #import <dlfcn.h>
 #import <substrate.h>
 #import "ProjectXLogging.h"
+#import <pthread.h>  // ← THÊM DÒNG NÀY
 #import "DataManager.h"
 #import "PXHookOptions.h"
 
