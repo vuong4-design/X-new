@@ -14,9 +14,11 @@ typedef CFDictionaryRef (*MGCopyMultipleAnswersFn)(CFArrayRef properties, int op
 static MGCopyAnswerFn orig_MGCopyAnswer = NULL;
 static MGCopyMultipleAnswersFn orig_MGCopyMultipleAnswers = NULL;
 
+// Thread safety
+static pthread_mutex_t px_mg_mutex = PTHREAD_MUTEX_INITIALIZER;
+
 #pragma mark - Helpers
 
-// Giữ lại hàm getSpoofableKeys để quản lý các key cần fake một cách tập trung
 static NSSet<NSString *> *getSpoofableKeys() {
     static NSSet<NSString *> *keys = nil;
     static dispatch_once_t onceToken;
@@ -45,91 +47,133 @@ static CFDataRef PXCreateCFDataFromUUIDStringOrNULL(NSString *uuidString) {
     return CFDataCreate(kCFAllocatorDefault, (const UInt8 *)bytes, sizeof(uuid_t));
 }
 
-// Giữ nguyên hàm tạo giá trị fake
 static CFTypeRef PXCreateOverrideForMGKey(NSString *key) {
     PhoneInfo *info = CurrentPhoneInfo();
     if (!info) return NULL;
     DeviceModel *dm = info.deviceModel;
     IosVersion *iv = info.iosVersion;
+    
     if ([key isEqualToString:@"ProductType"]) return PXCreateCFStringOrNULL(dm.modelName);
     if ([key isEqualToString:@"MarketingName"]) return PXCreateCFStringOrNULL(dm.name);
-    if ([key isEqualToString:@"HWModelStr"] || [key isEqualToString:@"HardwareModel"]) return PXCreateCFStringOrNULL(dm.hwModel);
+    if ([key isEqualToString:@"HWModelStr"] || [key isEqualToString:@"HardwareModel"]) 
+        return PXCreateCFStringOrNULL(dm.hwModel);
     if ([key isEqualToString:@"ProductVersion"]) return PXCreateCFStringOrNULL(iv.version);
     if ([key isEqualToString:@"BuildVersion"]) return PXCreateCFStringOrNULL(iv.build);
     if ([key isEqualToString:@"SerialNumber"]) return PXCreateCFStringOrNULL(info.serialNumber);
-    if ([key isEqualToString:@"InternationalMobileEquipmentIdentity"]) return PXCreateCFStringOrNULL(info.IMEI);
-    if ([key isEqualToString:@"MobileEquipmentIdentifier"]) return PXCreateCFStringOrNULL(info.MEID);
-    if ([key isEqualToString:@"UniqueDeviceID"]) return PXCreateCFStringOrNULL(info.systemBootUUID);
-    if ([key isEqualToString:@"UniqueDeviceIDData"]) return PXCreateCFDataFromUUIDStringOrNULL(info.systemBootUUID);
-    if ([key isEqualToString:@"UserAssignedDeviceName"]) return PXCreateCFStringOrNULL(info.deviceName);
+    if ([key isEqualToString:@"InternationalMobileEquipmentIdentity"]) 
+        return PXCreateCFStringOrNULL(info.IMEI);
+    if ([key isEqualToString:@"MobileEquipmentIdentifier"]) 
+        return PXCreateCFStringOrNULL(info.MEID);
+    if ([key isEqualToString:@"UniqueDeviceID"]) 
+        return PXCreateCFStringOrNULL(info.systemBootUUID);
+    if ([key isEqualToString:@"UniqueDeviceIDData"]) 
+        return PXCreateCFDataFromUUIDStringOrNULL(info.systemBootUUID);
+    if ([key isEqualToString:@"UserAssignedDeviceName"]) 
+        return PXCreateCFStringOrNULL(info.deviceName);
+    
     return NULL;
 }
 
-#pragma mark - Hooks (THE GOLDEN VERSION)
+#pragma mark - Hooks
 
 static CFTypeRef hook_MGCopyAnswer(CFStringRef property) {
+    // Early exits - không cần lock
     if (!orig_MGCopyAnswer) return NULL;
-    if (!property || !PXHookEnabled(@"devicemodel")) {
+    if (!property) return orig_MGCopyAnswer(property);
+    
+    // Check enabled WITHOUT autorelease pool
+    BOOL hookEnabled = PXHookEnabled(@"devicemodel");
+    if (!hookEnabled) {
         return orig_MGCopyAnswer(property);
     }
 
     NSString *key = (__bridge NSString *)property;
+    
+    // Quick check nếu không phải key cần fake
+    if (![getSpoofableKeys() containsObject:key]) {
+        return orig_MGCopyAnswer(property);
+    }
 
-    // Chỉ khi key nằm trong danh sách cần fake, chúng ta mới xử lý
-    if ([getSpoofableKeys() containsObject:key]) {
-        // Bên trong khối này mới là logic của bạn
-        @autoreleasepool {
-            CFTypeRef override = PXCreateOverrideForMGKey(key);
-            if (override) {
-                PXLog(@"[MobileGestalt] 🎭 Spoofed %@ = %@", key, (__bridge id)override);
-                return override; // Retained
+    // Bây giờ mới lock và xử lý
+    pthread_mutex_lock(&px_mg_mutex);
+    
+    CFTypeRef result = NULL;
+    
+    @autoreleasepool {
+        CFTypeRef override = PXCreateOverrideForMGKey(key);
+        if (override) {
+            PXLog(@"[MobileGestalt] 🎭 Spoofed %@ = %@", key, (__bridge id)override);
+            result = override; // Already retained
+        } else {
+            // Gọi original và PHẢI retain
+            result = orig_MGCopyAnswer(property);
+            if (result) {
+                CFRetain(result);
             }
         }
     }
-
-    // Với TẤT CẢ các key khác, gọi hàm gốc ngay lập tức
-    return orig_MGCopyAnswer(property);
+    
+    pthread_mutex_unlock(&px_mg_mutex);
+    
+    return result; // Caller's responsibility to release
 }
 
 static CFDictionaryRef hook_MGCopyMultipleAnswers(CFArrayRef properties, int options) {
-    if (!orig_MGCopyMultipleAnswers || !properties || !PXHookEnabled(@"devicemodel")) {
-        return orig_MGCopyMultipleAnswers ? orig_MGCopyMultipleAnswers(properties, options) : NULL;
+    // Early exits
+    if (!orig_MGCopyMultipleAnswers) return NULL;
+    if (!properties) return orig_MGCopyMultipleAnswers(properties, options);
+    
+    BOOL hookEnabled = PXHookEnabled(@"devicemodel");
+    if (!hookEnabled) {
+        return orig_MGCopyMultipleAnswers(properties, options);
     }
 
-    // Luôn gọi hàm gốc trước để lấy kết quả ban đầu
-    CFDictionaryRef origDict = orig_MGCopyMultipleAnswers(properties, options);
-
-    // Tạo một bản sao có thể thay đổi
-    CFMutableDictionaryRef out =
-        origDict ? CFDictionaryCreateMutableCopy(kCFAllocatorDefault, 0, origDict)
-                 : CFDictionaryCreateMutable(kCFAllocatorDefault, 0,
-                    &kCFTypeDictionaryKeyCallBacks,
-                    &kCFTypeDictionaryValueCallBacks);
+    pthread_mutex_lock(&px_mg_mutex);
     
-    // Chỉ duyệt qua các key chúng ta quan tâm
+    CFDictionaryRef result = NULL;
+    
     @autoreleasepool {
+        // Gọi original function
+        CFDictionaryRef origDict = orig_MGCopyMultipleAnswers(properties, options);
+        
+        // Tạo mutable copy hoặc dict mới
+        CFMutableDictionaryRef out = NULL;
+        if (origDict) {
+            out = CFDictionaryCreateMutableCopy(kCFAllocatorDefault, 0, origDict);
+            CFRelease(origDict); // Release ngay sau khi copy
+        } else {
+            out = CFDictionaryCreateMutable(kCFAllocatorDefault, 0,
+                &kCFTypeDictionaryKeyCallBacks,
+                &kCFTypeDictionaryValueCallBacks);
+        }
+        
+        // Apply overrides
         NSSet *spoofableKeys = getSpoofableKeys();
         CFIndex count = CFArrayGetCount(properties);
+        
         for (CFIndex i = 0; i < count; i++) {
             CFStringRef keyRef = (CFStringRef)CFArrayGetValueAtIndex(properties, i);
             if (!keyRef) continue;
+            
             NSString *key = (__bridge NSString *)keyRef;
-
+            
             if ([spoofableKeys containsObject:key]) {
                 CFTypeRef override = PXCreateOverrideForMGKey(key);
                 if (override) {
                     PXLog(@"[MobileGestalt] 🎭 [Multi] %@ = %@", key, (__bridge id)override);
                     CFDictionarySetValue(out, keyRef, override);
-                    CFRelease(override);
+                    CFRelease(override); // Dict đã retain
                 }
             }
         }
+        
+        result = out; // Transfer ownership
     }
-
-    if (origDict) CFRelease(origDict);
-    return out; // Retained
+    
+    pthread_mutex_unlock(&px_mg_mutex);
+    
+    return result;
 }
-
 
 #pragma mark - Init
 
@@ -154,7 +198,8 @@ static CFDictionaryRef hook_MGCopyMultipleAnswers(CFArrayRef properties, int opt
             PXLog(@"[MobileGestalt] ✅ Hooked MGCopyMultipleAnswers");
         }
         
-        dlclose(handle);
+        // KHÔNG close handle - libMobileGestalt cần được load suốt
+        // dlclose(handle);
     }
 }
 %end
