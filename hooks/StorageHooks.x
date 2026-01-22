@@ -8,6 +8,27 @@
 #import <mach-o/dyld.h>
 #import "DataManager.h"
 
+
+// ---- Compatibility aliases ----
+// Some project branches referenced hooked_* names while others used replaced_*.
+// Define aliases so whichever name is used will compile consistently.
+#ifndef hooked_statfs
+#define hooked_statfs replaced_statfs
+#endif
+#ifndef hooked_statfs64
+#define hooked_statfs64 replaced_statfs64
+#endif
+#ifndef hooked_fstatfs
+#define hooked_fstatfs replaced_fstatfs
+#endif
+#ifndef hooked_getfsstat
+#define hooked_getfsstat replaced_getfsstat
+#endif
+#ifndef hooked_getfsstat64
+#define hooked_getfsstat64 replaced_getfsstat64
+#endif
+
+
 // Constants for proper size calculations - use only marketing units (1000-based)
 #import "PXHookOptions.h"
 
@@ -248,6 +269,8 @@ struct statfs64 {
 
 // Function pointer for statfs
 static int (*orig_statfs)(const char *path, struct statfs *buf);
+// Function pointer for fstatfs
+static int (*orig_fstatfs)(int fd, struct statfs *buf);
 
 // Function pointer for statfs64 (64-bit variant)
 static int (*orig_statfs64)(const char *path, struct statfs64 *buf);
@@ -821,7 +844,7 @@ static CFTypeRef replaced_IORegistryEntryCreateCFProperty(io_registry_entry_t en
             // POSIX/statfs hooks only
             void *statfsPtr = dlsym(RTLD_DEFAULT, "statfs");
             if (statfsPtr) {
-                MSHookFunction(statfsPtr, (void *)replaced_statfs, (void **)&orig_statfs);
+                MSHookFunction(statfsPtr, (void *)replaced_statfs, (void **)&orig_fstatfs);
                 PXLog(@"[StorageHook] Hooked statfs");
             }
             void *statfs64Ptr = dlsym(RTLD_DEFAULT, "statfs64");
