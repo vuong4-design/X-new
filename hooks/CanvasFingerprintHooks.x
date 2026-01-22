@@ -532,6 +532,8 @@ static void reinjectFingerprintProtectionScriptToAllWKWebViews() {
 
 %end
 
+%end // <== BẠN CẦN THÊM DÒNG NÀY ĐỂ ĐÓNG GROUP 'PX_canvas'
+
 #pragma mark - Notification Handlers
 
 // Refresh settings when profile or settings change
