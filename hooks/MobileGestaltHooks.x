@@ -30,7 +30,6 @@ static NSSet<NSString *> *getSpoofableKeys() {
     return keys;
 }
 
-// Trả về NSString thay vì CFStringRef để tránh memory issue
 static id PXGetOverrideForMGKey(NSString *key) {
     PhoneInfo *info = CurrentPhoneInfo();
     if (!info) return nil;
@@ -54,7 +53,6 @@ static id PXGetOverrideForMGKey(NSString *key) {
     if ([key isEqualToString:@"UserAssignedDeviceName"]) 
         return info.deviceName;
     
-    // Special case: UniqueDeviceIDData cần CFData
     if ([key isEqualToString:@"UniqueDeviceIDData"]) {
         if (!info.systemBootUUID || info.systemBootUUID.length == 0) return nil;
         NSUUID *uuid = [[NSUUID alloc] initWithUUIDString:info.systemBootUUID];
@@ -70,12 +68,13 @@ static id PXGetOverrideForMGKey(NSString *key) {
 #pragma mark - Hooks
 
 static CFTypeRef hook_MGCopyAnswer(CFStringRef property) {
-    // Luôn gọi original trước
-    CFTypeRef originalResult = orig_MGCopyAnswer ? orig_MGCopyAnswer(property) : NULL;
+    // Safety checks
+    if (!orig_MGCopyAnswer || !property) {
+        return orig_MGCopyAnswer ? orig_MGCopyAnswer(property) : NULL;
+    }
     
-    // Nếu không enable hoặc không có property, return original
-    if (!property || !PXHookEnabled(@"devicemodel")) {
-        return originalResult;
+    if (!PXHookEnabled(@"devicemodel")) {
+        return orig_MGCopyAnswer(property);
     }
 
     @autoreleasepool {
@@ -83,42 +82,49 @@ static CFTypeRef hook_MGCopyAnswer(CFStringRef property) {
         
         // Chỉ xử lý các key trong whitelist
         if (![getSpoofableKeys() containsObject:key]) {
-            return originalResult;
+            return orig_MGCopyAnswer(property);
         }
         
         id override = PXGetOverrideForMGKey(key);
+        
+        // Nếu không có override, gọi original
         if (!override) {
-            return originalResult;
+            return orig_MGCopyAnswer(property);
         }
         
+        // Có override - return nó thay vì original
         PXLog(@"[MobileGestalt] 🎭 Spoofed %@ = %@", key, override);
         
-        // Release original nếu có
-        if (originalResult) {
-            CFRelease(originalResult);
-        }
-        
-        // Return với bridge_retained để match ownership semantics
+        // QUAN TRỌNG: __bridge_retained tạo +1 retain count
+        // Caller sẽ release (follow Copy rule)
         return (__bridge_retained CFTypeRef)override;
     }
 }
 
 static CFDictionaryRef hook_MGCopyMultipleAnswers(CFArrayRef properties, int options) {
-    // Luôn gọi original trước
-    CFDictionaryRef originalResult = orig_MGCopyMultipleAnswers 
-        ? orig_MGCopyMultipleAnswers(properties, options) 
-        : NULL;
+    if (!orig_MGCopyMultipleAnswers || !properties) {
+        return orig_MGCopyMultipleAnswers ? orig_MGCopyMultipleAnswers(properties, options) : NULL;
+    }
     
-    if (!properties || !PXHookEnabled(@"devicemodel")) {
-        return originalResult;
+    if (!PXHookEnabled(@"devicemodel")) {
+        return orig_MGCopyMultipleAnswers(properties, options);
     }
 
     @autoreleasepool {
-        // Convert sang NSDictionary để dễ xử lý
-        NSMutableDictionary *dict = originalResult 
-            ? [(__bridge NSDictionary *)originalResult mutableCopy]
-            : [NSMutableDictionary dictionary];
+        // Gọi original để lấy base dictionary
+        CFDictionaryRef originalDict = orig_MGCopyMultipleAnswers(properties, options);
         
+        // Tạo mutable dictionary từ original HOẶC tạo mới
+        NSMutableDictionary *result;
+        if (originalDict) {
+            result = [(__bridge NSDictionary *)originalDict mutableCopy];
+            // QUAN TRỌNG: Release original vì chúng ta đã copy
+            CFRelease(originalDict);
+        } else {
+            result = [NSMutableDictionary dictionary];
+        }
+        
+        // Apply overrides
         NSSet *spoofableKeys = getSpoofableKeys();
         NSArray *props = (__bridge NSArray *)properties;
         
@@ -130,18 +136,13 @@ static CFDictionaryRef hook_MGCopyMultipleAnswers(CFArrayRef properties, int opt
                 id override = PXGetOverrideForMGKey(key);
                 if (override) {
                     PXLog(@"[MobileGestalt] 🎭 [Multi] %@ = %@", key, override);
-                    dict[key] = override;
+                    result[key] = override;
                 }
             }
         }
         
-        // Release original
-        if (originalResult) {
-            CFRelease(originalResult);
-        }
-        
-        // Return với bridge_retained
-        return (__bridge_retained CFDictionaryRef)dict;
+        // Return với +1 retain count
+        return (__bridge_retained CFDictionaryRef)result;
     }
 }
 
