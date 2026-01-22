@@ -68,82 +68,21 @@ static id PXGetOverrideForMGKey(NSString *key) {
 #pragma mark - Hooks
 
 static CFTypeRef hook_MGCopyAnswer(CFStringRef property) {
-    // Safety checks
+    // Test version - chỉ fake 1 key để debug
     if (!orig_MGCopyAnswer || !property) {
         return orig_MGCopyAnswer ? orig_MGCopyAnswer(property) : NULL;
     }
     
-    if (!PXHookEnabled(@"devicemodel")) {
-        return orig_MGCopyAnswer(property);
-    }
-
-    @autoreleasepool {
-        NSString *key = (__bridge NSString *)property;
-        
-        // Chỉ xử lý các key trong whitelist
-        if (![getSpoofableKeys() containsObject:key]) {
-            return orig_MGCopyAnswer(property);
-        }
-        
-        id override = PXGetOverrideForMGKey(key);
-        
-        // Nếu không có override, gọi original
-        if (!override) {
-            return orig_MGCopyAnswer(property);
-        }
-        
-        // Có override - return nó thay vì original
-        PXLog(@"[MobileGestalt] 🎭 Spoofed %@ = %@", key, override);
-        
-        // QUAN TRỌNG: __bridge_retained tạo +1 retain count
-        // Caller sẽ release (follow Copy rule)
-        return (__bridge_retained CFTypeRef)override;
-    }
-}
-
-static CFDictionaryRef hook_MGCopyMultipleAnswers(CFArrayRef properties, int options) {
-    if (!orig_MGCopyMultipleAnswers || !properties) {
-        return orig_MGCopyMultipleAnswers ? orig_MGCopyMultipleAnswers(properties, options) : NULL;
+    NSString *key = (__bridge NSString *)property;
+    
+    // CHỈ fake ProductType để test
+    if ([key isEqualToString:@"ProductType"]) {
+        PXLog(@"[MobileGestalt] 🎭 Test fake ProductType");
+        NSString *fake = @"iPhone12,1";
+        return (__bridge_retained CFStringRef)fake;
     }
     
-    if (!PXHookEnabled(@"devicemodel")) {
-        return orig_MGCopyMultipleAnswers(properties, options);
-    }
-
-    @autoreleasepool {
-        // Gọi original để lấy base dictionary
-        CFDictionaryRef originalDict = orig_MGCopyMultipleAnswers(properties, options);
-        
-        // Tạo mutable dictionary từ original HOẶC tạo mới
-        NSMutableDictionary *result;
-        if (originalDict) {
-            result = [(__bridge NSDictionary *)originalDict mutableCopy];
-            // QUAN TRỌNG: Release original vì chúng ta đã copy
-            CFRelease(originalDict);
-        } else {
-            result = [NSMutableDictionary dictionary];
-        }
-        
-        // Apply overrides
-        NSSet *spoofableKeys = getSpoofableKeys();
-        NSArray *props = (__bridge NSArray *)properties;
-        
-        for (id keyObj in props) {
-            if (![keyObj isKindOfClass:[NSString class]]) continue;
-            NSString *key = (NSString *)keyObj;
-            
-            if ([spoofableKeys containsObject:key]) {
-                id override = PXGetOverrideForMGKey(key);
-                if (override) {
-                    PXLog(@"[MobileGestalt] 🎭 [Multi] %@ = %@", key, override);
-                    result[key] = override;
-                }
-            }
-        }
-        
-        // Return với +1 retain count
-        return (__bridge_retained CFDictionaryRef)result;
-    }
+    return orig_MGCopyAnswer(property);
 }
 
 #pragma mark - Init
@@ -158,16 +97,12 @@ static CFDictionaryRef hook_MGCopyMultipleAnswers(CFArrayRef properties, int opt
         }
 
         void *a = dlsym(handle, "MGCopyAnswer");
-        void *m = dlsym(handle, "MGCopyMultipleAnswers");
 
         if (a) {
             MSHookFunction(a, (void *)hook_MGCopyAnswer, (void **)&orig_MGCopyAnswer);
             PXLog(@"[MobileGestalt] ✅ Hooked MGCopyAnswer");
         }
-        if (m) {
-            MSHookFunction(m, (void *)hook_MGCopyMultipleAnswers, (void **)&orig_MGCopyMultipleAnswers);
-            PXLog(@"[MobileGestalt] ✅ Hooked MGCopyMultipleAnswers");
-        }
+     
     }
 }
 %end
