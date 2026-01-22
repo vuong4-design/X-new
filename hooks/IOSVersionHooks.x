@@ -45,7 +45,7 @@ static id (*original_NSString_stringWithContentsOfFile)(Class self, SEL _cmd, NS
 
 %ctor {
     @autoreleasepool {
-        NSString *bundleID = PXSafeBundleIdentifier();
+        NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier];
         NSString *processName = [[NSProcessInfo processInfo] processName];
         PXLog(@"[IOSVersionHooks] ✅ loaded in process=%@ bundle=%@", processName, bundleID);
     }
@@ -264,7 +264,7 @@ static void modifyUserAgentString(NSString **userAgentString, NSString *original
     WKWebView *resultWebView = %orig;
     
     @try {
-        NSString *bundleID = PXSafeBundleIdentifier();
+        NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier];
         // Special case for Safari and WebKit processes to force spoofing
         BOOL forceSpoofForWebKit = [bundleID isEqualToString:@"com.apple.mobilesafari"] || 
                                   [bundleID hasPrefix:@"com.apple.WebKit"];
@@ -306,7 +306,7 @@ static void modifyUserAgentString(NSString **userAgentString, NSString *original
     WKWebView *webView = %orig;
     
     @try {
-        NSString *bundleID = PXSafeBundleIdentifier();
+        NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier];
         // Special case for Safari and WebKit processes to force spoofing
         BOOL forceSpoofForWebKit = [bundleID isEqualToString:@"com.apple.mobilesafari"] || 
                                   [bundleID hasPrefix:@"com.apple.WebKit"];
@@ -371,7 +371,7 @@ static void modifyUserAgentString(NSString **userAgentString, NSString *original
 
 - (void)setCustomUserAgent:(NSString *)customUserAgent {
     @try {
-        NSString *bundleID = PXSafeBundleIdentifier();
+        NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier];
         // Special case for Safari and WebKit processes to force spoofing
         BOOL forceSpoofForWebKit = [bundleID isEqualToString:@"com.apple.mobilesafari"] || 
                                   [bundleID hasPrefix:@"com.apple.WebKit"];
@@ -409,7 +409,7 @@ static void modifyUserAgentString(NSString **userAgentString, NSString *original
     
     // If it's a user agent script, try to update the user agent
     if (isUserAgentScript) {
-        NSString *bundleID = PXSafeBundleIdentifier();
+        NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier];
         // Special case for Safari and WebKit processes to force spoofing
         BOOL forceSpoofForWebKit = [bundleID isEqualToString:@"com.apple.mobilesafari"] || 
                                   [bundleID hasPrefix:@"com.apple.WebKit"];
@@ -506,7 +506,7 @@ static void modifyUserAgentString(NSString **userAgentString, NSString *original
     NSString *originalUA = %orig;
     
     @try {
-        NSString *bundleID = PXSafeBundleIdentifier();
+        NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier];
         if ([bundleID isEqualToString:@"com.apple.mobilesafari"]) {
             NSString *spoofedVersion = CurrentPhoneInfo().iosVersion.version;
             NSString *originalVersion = [[UIDevice currentDevice] systemVersion];
@@ -532,7 +532,7 @@ static void modifyUserAgentString(NSString **userAgentString, NSString *original
     NSString *originalUA = %orig;
     
     @try {
-        NSString *bundleID = PXSafeBundleIdentifier();
+        NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier];
         if ([bundleID isEqualToString:@"com.apple.mobilesafari"]) {
             NSString *spoofedVersion = CurrentPhoneInfo().iosVersion.version;
             NSString *originalVersion = [[UIDevice currentDevice] systemVersion];
@@ -928,6 +928,9 @@ CFTypeRef replaced_CFBundleGetValueForInfoDictionaryKey(CFBundleRef bundle, CFSt
 
 %ctor {
     @autoreleasepool {   
+        if (!PXHookEnabled(@"iosversion")) {
+            return;
+        }
         
         NSLog(@"App is scoped, installing iOS version hooks");
         

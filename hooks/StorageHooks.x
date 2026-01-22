@@ -116,7 +116,7 @@ static void getStorageValuesForApp(uint64_t *totalBytes, uint64_t *freeBytes) {
         if (totalStorageGB <= 0) return;
         
         // Get app info for detection
-        NSString *currentBundleID = PXSafeBundleIdentifier();
+        NSString *currentBundleID = [[NSBundle mainBundle] bundleIdentifier];
         NSString *executablePath = [[NSBundle mainBundle] executablePath] ?: @"";
         NSString *appName = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleDisplayName"] ?: 
                            [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleName"] ?: @"";
@@ -706,6 +706,9 @@ static CFTypeRef replaced_IORegistryEntryCreateCFProperty(io_registry_entry_t en
 // Setup hooks - Use %ctor for constructor, runs when module loads
 %ctor {
     @autoreleasepool {
+        if (!PXHookEnabled(@"storage")) {
+            return;
+        }
         @try {
             PXLog(@"[StorageHooks] App is scoped, setting up storage hooks");
             

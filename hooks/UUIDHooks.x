@@ -123,7 +123,8 @@ static BOOL PXNSProcessInfoReturnNo(id self, SEL _cmd) {
         } else {
             PXLog(@"[WeaponX] ⚠️ NSProcessInfo class not found for fallback selectors");
         }
-        NSString *bundleID = PXSafeBundleIdentifier();
+        NSString *bundleID = (__bridge NSString *)CFBundleGetIdentifier(CFBundleGetMainBundle());
+        if (!bundleID) bundleID = @"";
         NSString *processName = [[NSProcessInfo processInfo] processName];
         PXLog(@"[WeaponX] ✅ UUIDHooks loaded in process=%@ bundle=%@", processName, bundleID);
         NSString *logMessage = [NSString stringWithFormat:@"[WeaponX] ✅ UUIDHooks loaded in process=%@ bundle=%@", processName, bundleID];
@@ -490,7 +491,8 @@ static const struct dyld_all_image_infos* replaced_dyld_get_all_image_infos(void
         const struct dyld_all_image_infos *original = orig_dyld_get_all_image_infos();
         if (!original) return NULL;
         
-        NSString *bundleID = PXSafeBundleIdentifier();
+        NSString *bundleID = (__bridge NSString *)CFBundleGetIdentifier(CFBundleGetMainBundle());
+        if (!bundleID) bundleID = @"";
         
         // Use direct check instead of manager
         // The compiler warns about comparing sharedCacheUUID with NULL because it's an array pointer
@@ -729,11 +731,14 @@ static void setupAdditionalSystemUUIDHooks() {
 // Update constructor to initialize the additional hooks
 %ctor {
     @autoreleasepool {
+        if (!PXHookEnabled(@"uuid")) {
+            return;
+        }
         // Delay hook initialization to ensure everything is properly set up
         // This helps avoid early hooking that might cause crashes
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.1 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
             // Enhanced process filtering - check if this is a process we should hook
-            NSString *bundleID = PXSafeBundleIdentifier();
+            NSString *bundleID = (__bridge_transfer NSString *)CFBundleGetIdentifier(CFBundleGetMainBundle());
             // Create a separate try-catch block for each hook to prevent one failure from affecting others
             @try {
                 // Set up hook for _dyld_get_shared_cache_uuid

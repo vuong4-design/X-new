@@ -31,19 +31,35 @@ static NSString * const kPXHookPrefsDomain = @"com.projectx.hookprefs";
 // Keep in sync with PXHookPrefsStore (common/PXHookPrefsStore.m)
 static NSString * const kPXHookPrefsGlobalKey = @"GlobalOptions";
 static NSString * const kPXHookPrefsPerAppKey = @"PerAppOptions";
+// Canonical path written by ProjectX UI app
+static NSString * const kPXHookPrefsPlistPath = @"/var/mobile/Library/Preferences/com.projectx.hookprefs.plist";
 
 static NSDictionary *PXCopyPrefsSnapshot(void) {
-    // Read prefs via CFPreferences/NSUserDefaults suite (works inside sandboxed app processes)
-    NSUserDefaults *ud = [[NSUserDefaults alloc] initWithSuiteName:kPXHookPrefsDomain];
+    // IMPORTANT:
+    // - ProjectX UI writes /var/mobile/Library/Preferences/com.projectx.hookprefs.plist
+    // - Using NSUserDefaults initWithSuiteName:@"com.projectx.hookprefs" will often NOT
+    //   read that file inside sandboxed app processes, leading to fallback defaults (all ON).
+    // So we read the plist file directly first, then fall back to suite if needed.
+    NSDictionary *root = [NSDictionary dictionaryWithContentsOfFile:jbroot(kPXHookPrefsPlistPath)];
 
-    NSDictionary *global = [ud dictionaryForKey:kPXHookPrefsGlobalKey];
-    NSDictionary *perApp = [ud dictionaryForKey:kPXHookPrefsPerAppKey];
+    NSDictionary *global = nil;
+    NSDictionary *perApp = nil;
+    if ([root isKindOfClass:[NSDictionary class]]) {
+        global = root[kPXHookPrefsGlobalKey];
+        perApp = root[kPXHookPrefsPerAppKey];
+    }
+
+    if (![global isKindOfClass:[NSDictionary class]] || ![perApp isKindOfClass:[NSDictionary class]]) {
+        NSUserDefaults *ud = [[NSUserDefaults alloc] initWithSuiteName:kPXHookPrefsDomain];
+        if (![global isKindOfClass:[NSDictionary class]]) global = [ud dictionaryForKey:kPXHookPrefsGlobalKey];
+        if (![perApp isKindOfClass:[NSDictionary class]]) perApp = [ud dictionaryForKey:kPXHookPrefsPerAppKey];
+    }
 
     if (![global isKindOfClass:[NSDictionary class]]) global = @{};
     if (![perApp isKindOfClass:[NSDictionary class]]) perApp = @{};
 
     // Merge with defaults so missing keys always have a value
-    NSDictionary *defaultGlobal = PXDefaultGlobalOptions();
+    NSDictionary *defaultGlobal = PXDefaultHookOptions();
     NSMutableDictionary *mergedGlobal = [defaultGlobal mutableCopy];
     [mergedGlobal addEntriesFromDictionary:global];
 
