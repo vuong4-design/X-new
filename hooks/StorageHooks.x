@@ -785,7 +785,7 @@ static CFTypeRef replaced_IORegistryEntryCreateCFProperty(io_registry_entry_t en
 // 2 = NSURL-only
 // 3 = POSIX/statfs-only
 #ifndef PX_STORAGE_BRANCH
-#define PX_STORAGE_BRANCH 2
+#define PX_STORAGE_BRANCH 3
 #endif
 
 %ctor {
