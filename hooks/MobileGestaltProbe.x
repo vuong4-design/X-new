@@ -92,7 +92,7 @@ static Boolean hook_MGGetBoolAnswer(CFStringRef property) {
 %ctor {
     @autoreleasepool {
         // Always hook wrapper (cheap); logs gated by mgprobe
-        %init(MobileGestalt);
+        %init;
 
         // Fishhook install (does not patch libMobileGestalt __TEXT)
         struct rebinding rs[2] = {
