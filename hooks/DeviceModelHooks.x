@@ -22,6 +22,73 @@ static int (*orig_sysctlbyname)(const char *name, void *oldp, size_t *oldlenp, v
 static int (*orig_sysctl)(int *, u_int, void *, size_t *, void *, size_t);
 static __thread BOOL px_sysctlbyname_in_hook = NO;
 
+// Log throttling: log each sysctl key once per process (to avoid spam)
+static CFMutableSetRef gPXLoggedSysctlKeys = NULL;
+
+static void PXEnsureLoggedSysctlKeySet(void) {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        gPXLoggedSysctlKeys = CFSetCreateMutable(kCFAllocatorDefault, 0, &kCFTypeSetCallBacks);
+    });
+}
+
+static BOOL PXShouldLogSysctlKeyOnce(const char *name) {
+    if (!name) return NO;
+    PXEnsureLoggedSysctlKeySet();
+    CFStringRef key = CFStringCreateWithCString(kCFAllocatorDefault, name, kCFStringEncodingUTF8);
+    if (!key) return NO;
+    BOOL should = !CFSetContainsValue(gPXLoggedSysctlKeys, key);
+    if (should) CFSetAddValue(gPXLoggedSysctlKeys, key);
+    CFRelease(key);
+    return should;
+}
+
+static int PXWriteSysctlCString(const char *name, const char *value, void *oldp, size_t *oldlenp) {
+    if (!oldlenp || !value) { errno = EINVAL; return -1; }
+    size_t required = strlen(value) + 1; // include NUL
+    if (!oldp) {
+        *oldlenp = required;
+        return 0;
+    }
+    if (*oldlenp < required) {
+        *oldlenp = required;
+        errno = ENOMEM;
+        return -1;
+    }
+    memset(oldp, 0, *oldlenp);
+    memcpy(oldp, value, required);
+    *oldlenp = required;
+    return 0;
+}
+
+static int PXWriteSysctlInt64(const char *name, int64_t v, void *oldp, size_t *oldlenp) {
+    if (!oldlenp) { errno = EINVAL; return -1; }
+    // Keep caller's expected size when possible
+    if (!oldp) {
+        // Ask original for size if available; otherwise default to 8
+        *oldlenp = (*oldlenp ? *oldlenp : sizeof(int64_t));
+        return 0;
+    }
+    if (*oldlenp == sizeof(int)) {
+        *(int *)oldp = (int)v;
+        return 0;
+    }
+    if (*oldlenp == sizeof(uint32_t)) {
+        *(uint32_t *)oldp = (uint32_t)v;
+        return 0;
+    }
+    if (*oldlenp == sizeof(unsigned long)) {
+        *(unsigned long *)oldp = (unsigned long)v;
+        return 0;
+    }
+    if (*oldlenp >= sizeof(int64_t)) {
+        *(int64_t *)oldp = (int64_t)v;
+        return 0;
+    }
+    errno = ENOMEM;
+    return -1;
+}
+
 %ctor {
     @autoreleasepool {
         NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier];
@@ -89,306 +156,241 @@ static int hook_uname(struct utsname *buf) {
 }
 
 // Hook for sysctlbyname - another common way to get device model
-// NOTE: Many callers use a 2-step pattern:
-//   1) sysctlbyname(name, NULL, &len, NULL, 0)  -> query required length
-//   2) allocate buffer(len) then call again to fetch value
-// If we don't spoof the *length* in step (1), caller may allocate a buffer that's too small,
-// causing our spoof to fail and the caller to fall back to the original value.
-static int PXWriteSysctlCString(const char *sysctlNameForLog,
-                               const char *valueToUse,
-                               void *oldp,
-                               size_t *oldlenp) {
-    if (!valueToUse || !oldlenp) {
-        errno = EINVAL;
-        return -1;
-    }
-
-    size_t need = strlen(valueToUse) + 1; // include null terminator
-
-    // Size query
-    if (oldp == NULL) {
-        *oldlenp = need;
-        return 0;
-    }
-
-    // Buffer too small: sysctl/sysctlbyname convention is ENOMEM and required size in *oldlenp
-    if (*oldlenp < need) {
-        *oldlenp = need;
-        errno = ENOMEM;
-        return -1;
-    }
-
-    // Write
-    memset(oldp, 0, *oldlenp);
-    memcpy(oldp, valueToUse, need);
-    *oldlenp = need;
-    return 0;
-}
-
 static int hook_sysctlbyname(const char *name, void *oldp, size_t *oldlenp, void *newp, size_t newlen) {
-    if (!orig_sysctlbyname) {
-        errno = ENOSYS;
-        return -1;
-    }
-    if (px_sysctlbyname_in_hook) {
-        return orig_sysctlbyname(name, oldp, oldlenp, newp, newlen);
-    }
-    if (!name) {
-        errno = EINVAL;
-        return -1;
-    }
-
-    // If caller doesn't provide oldlenp we can't safely spoof; pass through.
-    if (!oldlenp) {
-        return orig_sysctlbyname(name, oldp, oldlenp, newp, newlen);
-    }
+    if (!orig_sysctlbyname) return -1;
+    if (px_sysctlbyname_in_hook) return orig_sysctlbyname(name, oldp, oldlenp, newp, newlen);
+    if (!name) { errno = EINVAL; return -1; }
 
     px_sysctlbyname_in_hook = YES;
 
-    NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier];
+    NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier] ?: @"<unknown>";
+    PhoneInfo *info = CurrentPhoneInfo();
+    DeviceModel *model = info.deviceModel;
+    IosVersion *iv = info.iosVersion;
 
-    // Capture original (best-effort) for logging only when caller provided a buffer.
-    char originalValue[256] = "<not available>";
-    size_t originalLen = sizeof(originalValue);
-    int origResult = -1;
-    if (oldp != NULL && oldlenp != NULL && *oldlenp > 0) {
-        origResult = orig_sysctlbyname(name, originalValue, &originalLen, NULL, 0);
-    }
-
-    // Get device specs
-    PhoneInfo *pi = CurrentPhoneInfo();
-    DeviceModel *model = pi.deviceModel;
-    if (!model) {
+    // If we don't have data, fall back immediately
+    if (!model || !iv) {
         px_sysctlbyname_in_hook = NO;
         return orig_sysctlbyname(name, oldp, oldlenp, newp, newlen);
     }
 
-    // CPU architecture for processor-related sysctls
-    NSString *cpuArchitecture = model.cpuArchitecture;
-    NSInteger cpuCoreCount = [model.cpuCoreCount integerValue];
-    NSString *spoofedValue = nil;
+    // Capture original value for nicer logs (best effort, not for size queries)
+    char originalValue[256] = "<not available>";
+    size_t originalLen = sizeof(originalValue);
+    (void)orig_sysctlbyname(name, originalValue, &originalLen, NULL, 0);
 
-    // String sysctls we spoof
-    if (strcmp(name, "hw.machine") == 0 || strcmp(name, "hw.product") == 0) {
-        spoofedValue = model.modelName;
-    } else if (strcmp(name, "hw.model") == 0) {
-        spoofedValue = model.hwModel;
-    } else if (strcmp(name, "kern.osproductversion") == 0) {
-        spoofedValue = pi.iosVersion.version;
-    }
-
-    // Integer sysctls
-    if (strcmp(name, "hw.ncpu") == 0 || strcmp(name, "hw.activecpu") == 0) {
-        if (cpuCoreCount > 0 && oldp != NULL) {
-            if (*oldlenp == sizeof(uint32_t)) {
-                *(uint32_t *)oldp = (uint32_t)cpuCoreCount;
-                px_sysctlbyname_in_hook = NO;
-                return 0;
-            } else if (*oldlenp == sizeof(int)) {
-                *(int *)oldp = (int)cpuCoreCount;
-                px_sysctlbyname_in_hook = NO;
-                return 0;
-            } else if (*oldlenp == sizeof(unsigned long)) {
-                *(unsigned long *)oldp = (unsigned long)cpuCoreCount;
-                px_sysctlbyname_in_hook = NO;
-                return 0;
-            }
-        }
-        // fall through to original if sizes don't match or oldp NULL
-    }
-
-    // CPU brand/model strings
-    if (strcmp(name, "hw.cpu.brand_string") == 0 || strcmp(name, "hw.cpubrand") == 0) {
-        if (cpuArchitecture && cpuArchitecture.length > 0) {
-            const char *cpuBrand = [cpuArchitecture UTF8String];
-            int w = PXWriteSysctlCString(name, cpuBrand, oldp, oldlenp);
-            if (w == 0) {
-                px_sysctlbyname_in_hook = NO;
-                return 0;
-            }
-            // If ENOMEM, propagate so caller reallocates correctly
-            px_sysctlbyname_in_hook = NO;
-            return w;
-        }
-    }
-
-    // If we have a spoofed string value, write it with proper length semantics.
-    if (spoofedValue.length > 0) {
-        const char *valueToUse = [spoofedValue UTF8String];
-        int w = PXWriteSysctlCString(name, valueToUse, oldp, oldlenp);
-
-        if (w == 0 && oldp != NULL) {
-            if (origResult == 0) {
-                PXLog(@"[model] Spoofed sysctlbyname %s from: %s to: %s for app: %@",
-                      name, originalValue, valueToUse, bundleID);
-            } else {
-                PXLog(@"[model] Spoofed sysctlbyname %s to: %s for app: %@",
-                      name, valueToUse, bundleID);
-            }
+    // ---- New additions requested ----
+    // kern.ostype => "Darwin"
+    if (strcmp(name, "kern.ostype") == 0) {
+        const char *v = "Darwin";
+        int r = PXWriteSysctlCString(name, v, oldp, oldlenp);
+        if (r == 0 && PXShouldLogSysctlKeyOnce(name)) {
+            PXLog(@"[model] Spoofed sysctlbyname %s from: %s to: %s for app: %@", name, originalValue, v, bundleID);
         }
         px_sysctlbyname_in_hook = NO;
-        return w;
+        return r;
     }
 
-    // For all other cases, pass through to the original function
-    int result = orig_sysctlbyname(name, oldp, oldlenp, newp, newlen);
-    px_sysctlbyname_in_hook = NO;
-    return result;
-}
-
-
-
-// Hook for UIDevice methods - many apps use combinations of these
-%group PX_devicemodel
-
-%hook UIDevice
-
-- (NSString *)model {
-    NSString *originalModel = %orig;
-    NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier];
-    
-    if (!bundleID) {
-        return originalModel;
-    }
-    
-    // Always log access to help with debugging
-    PXLog(@"[model] App %@ checked UIDevice model: %@", bundleID, originalModel);
-    
-    // Only spoof if enabled for this app
-    NSString *spoofedModel = CurrentPhoneInfo().deviceModel.modelName;
-    if (spoofedModel.length > 0) {
-        PXLog(@"[model] Spoofing UIDevice model from %@ to %@ for app: %@", 
-                originalModel, spoofedModel, bundleID);
-        return spoofedModel;
-    }
-    
-    
-    return originalModel;
-}
-
-- (NSString *)name {
-    // Just log access but don't spoof - this is device name, not model
-    NSString *originalName = %orig;
-    PXLog(@"[model] App checked UIDevice name: %@",  originalName);
-    
-    
-    return originalName;
-}
-
-- (NSString *)systemName {
-    // Just log access but don't spoof - this is iOS, not device model
-    NSString *originalName = %orig;    
-    PXLog(@"[model] App checked UIDevice systemName: %@", originalName);
-    
-    
-    return originalName;
-}
-
-- (NSString *)localizedModel {
-    NSString *originalModel = %orig;
-    NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier];
-    
-    if (!bundleID) {
-        return originalModel;
-    }
-    
-    // Always log access to help with debugging
-    PXLog(@"[model] App %@ checked UIDevice localizedModel: %@", bundleID, originalModel);
-     
-    NSString *spoofedModel = CurrentPhoneInfo().deviceModel.modelName;
-    if (spoofedModel.length > 0) {
-        PXLog(@"[model] Spoofing UIDevice localizedModel from %@ to %@ for app: %@", 
-                originalModel, spoofedModel, bundleID);
-        return spoofedModel;
-    }
-
-    
-    return originalModel;
-}
-
-%end
-
-// Add NSDictionary+machineName hook - a common extension in iOS apps to map device model codes
-%hook NSDictionary
-
-+ (NSDictionary *)dictionaryWithContentsOfURL:(NSURL *)url {
-    NSDictionary *result = %orig;
-    
-    if (url) {
-        NSString *urlStr = [url absoluteString];
-        if ([urlStr containsString:@"device"] || [urlStr containsString:@"model"]) {
-            NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier];
-            PXLog(@"[model] App %@ loaded dictionary with URL: %@", bundleID, urlStr);
+    // kern.osrelease => iv.darwin (e.g. "20.2.0")
+    if (strcmp(name, "kern.osrelease") == 0) {
+        const char *v = iv.darwin ? [iv.darwin UTF8String] : NULL;
+        if (v) {
+            int r = PXWriteSysctlCString(name, v, oldp, oldlenp);
+            if (r == 0 && PXShouldLogSysctlKeyOnce(name)) {
+                PXLog(@"[model] Spoofed sysctlbyname %s from: %s to: %s for app: %@", name, originalValue, v, bundleID);
+            }
+            px_sysctlbyname_in_hook = NO;
+            return r;
         }
     }
-    
-    return result;
+
+    // kern.version => iv.kernelVersion (long string)
+    if (strcmp(name, "kern.version") == 0) {
+        const char *v = iv.kernelVersion ? [iv.kernelVersion UTF8String] : NULL;
+        if (v) {
+            int r = PXWriteSysctlCString(name, v, oldp, oldlenp);
+            if (r == 0 && PXShouldLogSysctlKeyOnce(name)) {
+                PXLog(@"[model] Spoofed sysctlbyname %s for app: %@", name, bundleID);
+            }
+            px_sysctlbyname_in_hook = NO;
+            return r;
+        }
+    }
+
+    // kern.hostname => info.deviceName
+    if (strcmp(name, "kern.hostname") == 0) {
+        const char *v = info.deviceName ? [info.deviceName UTF8String] : NULL;
+        if (v) {
+            int r = PXWriteSysctlCString(name, v, oldp, oldlenp);
+            if (r == 0 && PXShouldLogSysctlKeyOnce(name)) {
+                PXLog(@"[model] Spoofed sysctlbyname %s from: %s to: %s for app: %@", name, originalValue, v, bundleID);
+            }
+            px_sysctlbyname_in_hook = NO;
+            return r;
+        }
+    }
+
+    // hw.physicalcpu / hw.physicalcpu_max / hw.logicalcpu / hw.logicalcpu_max
+    if (strcmp(name, "hw.physicalcpu") == 0 ||
+        strcmp(name, "hw.physicalcpu_max") == 0 ||
+        strcmp(name, "hw.logicalcpu") == 0 ||
+        strcmp(name, "hw.logicalcpu_max") == 0) {
+
+        int64_t cores = (int64_t)[model.cpuCoreCount integerValue];
+        if (cores > 0) {
+            // Preserve original expected size on size-only query
+            if (!oldp && oldlenp) {
+                // Ask original for size so caller allocates the same amount
+                size_t tmp = 0;
+                (void)orig_sysctlbyname(name, NULL, &tmp, NULL, 0);
+                if (tmp > 0) *oldlenp = tmp;
+                px_sysctlbyname_in_hook = NO;
+                return 0;
+            }
+
+            int r = PXWriteSysctlInt64(name, cores, oldp, oldlenp);
+            if (r == 0 && PXShouldLogSysctlKeyOnce(name)) {
+                PXLog(@"[model] Spoofed sysctlbyname %s from: %s to: %lld for app: %@", name, originalValue, (long long)cores, bundleID);
+            }
+            px_sysctlbyname_in_hook = NO;
+            return r;
+        }
+    }
+
+    // ---- Existing behavior (but fixed for proper size-query semantics) ----
+    // NOTE: We must handle (oldp==NULL, oldlenp!=NULL) correctly, or callers will allocate
+    // too-small buffers and we will later log "value too long".
+    NSString *spoofedStr = nil;
+
+    if (strcmp(name, "hw.machine") == 0 || strcmp(name, "hw.product") == 0) {
+        spoofedStr = model.modelName;
+    } else if (strcmp(name, "hw.model") == 0) {
+        spoofedStr = model.hwModel;
+    } else if (strcmp(name, "kern.osproductversion") == 0) {
+        spoofedStr = iv.version;
+    }
+
+    if (spoofedStr) {
+        const char *v = [spoofedStr UTF8String];
+        int r = PXWriteSysctlCString(name, v, oldp, oldlenp);
+        if (r == 0 && PXShouldLogSysctlKeyOnce(name)) {
+            PXLog(@"[model] Spoofed sysctlbyname %s from: %s to: %s for app: %@", name, originalValue, v, bundleID);
+        }
+        px_sysctlbyname_in_hook = NO;
+        return r;
+    }
+
+    // CPU-related sysctls you already handled
+    if (strcmp(name, "hw.ncpu") == 0 || strcmp(name, "hw.activecpu") == 0) {
+        int64_t cores = (int64_t)[model.cpuCoreCount integerValue];
+        if (cores > 0) {
+            if (!oldp && oldlenp) {
+                size_t tmp = 0;
+                (void)orig_sysctlbyname(name, NULL, &tmp, NULL, 0);
+                if (tmp > 0) *oldlenp = tmp;
+                px_sysctlbyname_in_hook = NO;
+                return 0;
+            }
+            int r = PXWriteSysctlInt64(name, cores, oldp, oldlenp);
+            if (r == 0 && PXShouldLogSysctlKeyOnce(name)) {
+                PXLog(@"[model] Spoofed sysctlbyname %s to: %lld for app: %@", name, (long long)cores, bundleID);
+            }
+            px_sysctlbyname_in_hook = NO;
+            return r;
+        }
+    }
+
+    // Fall back to original for everything else
+    px_sysctlbyname_in_hook = NO;
+    return orig_sysctlbyname(name, oldp, oldlenp, newp, newlen);
 }
 
-%end
-
-// This declaration was already added at the top of the file, so remove this duplicate declaration
-// static int (*orig_sysctl)(int *, u_int, void *, size_t *, void *, size_t);
-
-static __thread BOOL px_sysctl_in_hook = NO;
 
 static int hook_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp, size_t newlen) {
     if (!orig_sysctl) {
         PXLog(@"[model] ⚠️ sysctl original is NULL; returning -1 to avoid crash");
-        errno = ENOSYS;
         return -1;
     }
     if (!name) {
         PXLog(@"[model] ⚠️ sysctl received NULL name; returning -1 to avoid crash");
-        errno = EINVAL;
         return -1;
     }
-    if (px_sysctl_in_hook) {
-        return orig_sysctl(name, namelen, oldp, oldlenp, newp, newlen);
-    }
-
-    // If caller doesn't provide oldlenp we can't spoof safely.
-    if (!oldlenp) {
-        return orig_sysctl(name, namelen, oldp, oldlenp, newp, newlen);
-    }
-
-    px_sysctl_in_hook = YES;
-
+    // Get the bundle ID first to determine if we should spoof
     NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier];
     if (!bundleID) {
-        int r = orig_sysctl(name, namelen, oldp, oldlenp, newp, newlen);
-        px_sysctl_in_hook = NO;
-        return r;
+        return orig_sysctl(name, namelen, oldp, oldlenp, newp, newlen);
     }
 
+    // Safety: if caller passes NULL out pointers (common anti-tamper probe), do not spoof or touch them
+    if (!oldp || !oldlenp) {
+        return orig_sysctl(name, namelen, oldp, oldlenp, newp, newlen);
+    }
+    
+    // Check if this is a hardware model (CTL_HW + HW_MACHINE) or hw.model (CTL_HW + HW_MODEL) query
     BOOL isHWMachine = (namelen >= 2 && name[0] == 6 /*CTL_HW*/ && name[1] == 1 /*HW_MACHINE*/);
-    BOOL isHWModel   = (namelen >= 2 && name[0] == 6 /*CTL_HW*/ && name[1] == 2 /*HW_MODEL*/);
+    BOOL isHWModel = (namelen >= 2 && name[0] == 6 /*CTL_HW*/ && name[1] == 2 /*HW_MODEL*/);
     BOOL isModelQuery = isHWMachine || isHWModel;
-
-    if (isModelQuery) {
-        NSString *spoofed = isHWMachine ? CurrentPhoneInfo().deviceModel.modelName
-                                        : CurrentPhoneInfo().deviceModel.hwModel;
-        if (spoofed.length > 0) {
-            const char *valueToUse = [spoofed UTF8String];
-            // Respect sysctl length semantics
-            int w = PXWriteSysctlCString(isHWMachine ? "hw.machine" : "hw.model", valueToUse, oldp, oldlenp);
-
-            // Log only on successful write with a buffer
-            if (w == 0 && oldp != NULL) {
-                PXLog(@"[model] Spoofed sysctl CTL_HW %@ to: %s for app: %@",
-                      isHWMachine ? @"hw.machine" : @"hw.model", valueToUse, bundleID);
+    
+    // Store original value for logging if this is a hardware query
+    char originalValue[256] = "<not available>";
+    
+    if (isModelQuery && oldp && oldlenp && *oldlenp > 0) {
+        // Make a copy of oldp and oldlenp to get original value
+        void *origBuf = malloc(*oldlenp);
+        size_t origLen = *oldlenp;
+        
+        if (origBuf) {
+            int origResult = orig_sysctl(name, namelen, origBuf, &origLen, NULL, 0);
+            if (origResult == 0) {
+                strlcpy(originalValue, origBuf, sizeof(originalValue));
             }
-
-            px_sysctl_in_hook = NO;
-            return w;
+            free(origBuf);
         }
     }
-
+    
+    // Call original function to get the original value
     int ret = orig_sysctl(name, namelen, oldp, oldlenp, newp, newlen);
-    px_sysctl_in_hook = NO;
+    
+    // Check if this is a hardware model query and if we need to spoof it
+    if (ret == 0 && isModelQuery) {
+        if (oldp && oldlenp && *oldlenp > 0) {
+            NSString *spoofedValue = nil;
+            
+            // Get the appropriate spoofed value based on the query type
+            if (isHWMachine) {
+                spoofedValue = CurrentPhoneInfo().deviceModel.modelName;
+            } else if (isHWModel) {
+                spoofedValue = CurrentPhoneInfo().deviceModel.hwModel;
+            }
+            
+            if (spoofedValue.length > 0) {
+                const char *valueToUse = [spoofedValue UTF8String];
+                if (valueToUse) {
+                    size_t valueLen = strlen(valueToUse);
+                    
+                    // Ensure we don't overflow the buffer
+                    if (valueLen < *oldlenp) {
+                        memset(oldp, 0, *oldlenp);
+                        strcpy(oldp, valueToUse);
+                        PXLog(@"[model] Spoofed sysctl CTL_HW %@ from %s to: %s for app: %@", 
+                             isHWMachine ? @"hw.machine" : @"hw.model", originalValue, valueToUse, bundleID);
+                    } else {
+                        PXLog(@"[model] WARNING: Spoofed value too long for sysctl buffer");
+                    }
+                }
+            } else {
+                PXLog(@"[model] WARNING: Failed to get spoofed value for %@", 
+                     isHWMachine ? @"hw.machine" : @"hw.model");
+            }
+        } else {
+            // Just log the access without spoofing
+            PXLog(@"[model] App %@ checked sysctl CTL_HW %@: %s", 
+                 bundleID, isHWMachine ? @"hw.machine" : @"hw.model", originalValue);
+        }
+    }
+    
     return ret;
 }
-
 
 
 %ctor {
