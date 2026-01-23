@@ -114,8 +114,7 @@ static NSString *PXGetSpoofedUserAgent(void) {
 // ----------------------------------------------------------------------------
 // 2) CFNetwork UA: CFHTTPMessageSetHeaderFieldValue
 // ----------------------------------------------------------------------------
-%hookf(void, CFHTTPMessageSetHeaderFieldValue,
-       CFHTTPMessageRef message, CFStringRef headerField, CFStringRef value) {
+%hookf(void, CFHTTPMessageSetHeaderFieldValue, CFHTTPMessageRef message, CFStringRef headerField, CFStringRef value) {
 
     if (PXWebUASpoofEnabled() &&
         headerField &&
