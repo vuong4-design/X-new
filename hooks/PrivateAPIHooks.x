@@ -1,8 +1,9 @@
 #import <Foundation/Foundation.h>
+#import <substrate.h>
+
 #import "ProjectXLogging.h"
 #import "DataManager.h"
 #import "PXHookOptions.h"
-#import <substrate.h>  // ← THÊM DÒNG NÀY
 
 // Private function declaration
 extern NSString *MGCopyAnswer(NSString *key);
