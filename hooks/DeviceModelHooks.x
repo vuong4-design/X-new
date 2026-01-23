@@ -426,8 +426,6 @@ static int hook_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, vo
     }
 }
 
-%end
-
 %ctor {
     if (PXHookEnabled(@"devicemodel")) {
         %init(PX_devicemodel);
