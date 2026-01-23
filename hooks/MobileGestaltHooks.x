@@ -1,6 +1,4 @@
 #import <Foundation/Foundation.h>
-#import <dlfcn.h>
-#import <substrate.h>
 #import "ProjectXLogging.h"
 #import "DataManager.h"
 #import "PXHookOptions.h"
@@ -11,14 +9,6 @@
 + (id)copyAnswer:(NSString *)key;
 + (NSDictionary *)copyMultipleAnswers:(NSArray *)keys options:(int)options;
 @end
-
-#pragma mark - C Function Typedefs
-
-typedef CFTypeRef (*MGCopyAnswerFn)(CFStringRef property);
-typedef CFDictionaryRef (*MGCopyMultipleAnswersFn)(CFArrayRef properties, int options);
-
-static MGCopyAnswerFn orig_MGCopyAnswer = NULL;
-static MGCopyMultipleAnswersFn orig_MGCopyMultipleAnswers = NULL;
 
 #pragma mark - Shared Override Logic
 
@@ -31,8 +21,9 @@ static NSSet<NSString *> *getSpoofableKeys() {
             @"ProductVersion", @"BuildVersion", @"SerialNumber", 
             @"InternationalMobileEquipmentIdentity", @"MobileEquipmentIdentifier",
             @"UniqueDeviceID", @"UniqueDeviceIDData", @"UserAssignedDeviceName",
-            // Thêm các key bổ sung mà app có thể query
-            @"DeviceClass", @"RegionInfo", @"ModelNumber", @"RegionCode"
+            // Thêm nhiều key hơn
+            @"DeviceClass", @"RegionInfo", @"ModelNumber", @"RegionCode",
+            @"DeviceName", @"UniqueChipID", @"CPUArchitecture"
         ]];
     });
     return keys;
@@ -63,6 +54,7 @@ static id PXGetOverrideForMGKey(NSString *key) {
     if ([key isEqualToString:@"MobileEquipmentIdentifier"]) return info.MEID;
     if ([key isEqualToString:@"UniqueDeviceID"]) return info.systemBootUUID;
     if ([key isEqualToString:@"UserAssignedDeviceName"]) return info.deviceName;
+    if ([key isEqualToString:@"DeviceName"]) return info.deviceName;
     
     // Special: UUID as Data
     if ([key isEqualToString:@"UniqueDeviceIDData"]) {
@@ -84,7 +76,7 @@ static id PXGetOverrideForMGKey(NSString *key) {
 + (id)copyAnswer:(NSString *)key {
     id override = PXGetOverrideForMGKey(key);
     if (override) {
-        PXLog(@"[MobileGestalt][ObjC] 🎭 Spoofed %@ = %@", key, override);
+        PXLog(@"[MobileGestalt] 🎭 Spoofed %@ = %@", key, override);
         return override;
     }
     return %orig;
@@ -97,7 +89,7 @@ static id PXGetOverrideForMGKey(NSString *key) {
     for (NSString *key in keys) {
         id override = PXGetOverrideForMGKey(key);
         if (override) {
-            PXLog(@"[MobileGestalt][ObjC] 🎭 [Multi] %@ = %@", key, override);
+            PXLog(@"[MobileGestalt] 🎭 [Multi] %@ = %@", key, override);
             result[key] = override;
         }
     }
@@ -107,101 +99,9 @@ static id PXGetOverrideForMGKey(NSString *key) {
 
 %end
 
-#pragma mark - C Function Hooks
-
-static CFTypeRef hooked_MGCopyAnswer(CFStringRef property) {
-    if (!orig_MGCopyAnswer || !property) {
-        return orig_MGCopyAnswer ? orig_MGCopyAnswer(property) : NULL;
-    }
-    
-    @autoreleasepool {
-        NSString *key = (__bridge NSString *)property;
-        
-        // Chỉ xử lý các key trong whitelist
-        if ([getSpoofableKeys() containsObject:key]) {
-            id override = PXGetOverrideForMGKey(key);
-            if (override) {
-                PXLog(@"[MobileGestalt][C] 🎭 Spoofed %@ = %@", key, override);
-                return (__bridge_retained CFTypeRef)override;
-            }
-        }
-    }
-    
-    return orig_MGCopyAnswer(property);
-}
-
-static CFDictionaryRef hooked_MGCopyMultipleAnswers(CFArrayRef properties, int options) {
-    if (!orig_MGCopyMultipleAnswers || !properties) {
-        return orig_MGCopyMultipleAnswers ? orig_MGCopyMultipleAnswers(properties, options) : NULL;
-    }
-    
-    @autoreleasepool {
-        CFDictionaryRef originalDict = orig_MGCopyMultipleAnswers(properties, options);
-        
-        NSMutableDictionary *result;
-        if (originalDict) {
-            result = [(__bridge NSDictionary *)originalDict mutableCopy];
-            CFRelease(originalDict);
-        } else {
-            result = [NSMutableDictionary dictionary];
-        }
-        
-        NSSet *spoofableKeys = getSpoofableKeys();
-        NSArray *props = (__bridge NSArray *)properties;
-        
-        for (NSString *key in props) {
-            if ([spoofableKeys containsObject:key]) {
-                id override = PXGetOverrideForMGKey(key);
-                if (override) {
-                    PXLog(@"[MobileGestalt][C] 🎭 [Multi] %@ = %@", key, override);
-                    result[key] = override;
-                }
-            }
-        }
-        
-        return (__bridge_retained CFDictionaryRef)result;
-    }
-}
-
-#pragma mark - C Function Hook Installation
-
-%group PX_mobilegestalt_cfunctions
-
-%ctor {
-    @autoreleasepool {
-        void *handle = dlopen("/usr/lib/libMobileGestalt.dylib", RTLD_LAZY);
-        if (!handle) {
-            PXLog(@"[MobileGestalt] ❌ Failed to open libMobileGestalt.dylib");
-            return;
-        }
-
-        void *a = dlsym(handle, "MGCopyAnswer");
-        void *m = dlsym(handle, "MGCopyMultipleAnswers");
-
-        if (a) {
-            MSHookFunction(a, (void *)hooked_MGCopyAnswer, (void **)&orig_MGCopyAnswer);
-            PXLog(@"[MobileGestalt] ✅ Hooked C function MGCopyAnswer");
-        } else {
-            PXLog(@"[MobileGestalt] ⚠️ Could not find MGCopyAnswer");
-        }
-        
-        if (m) {
-            MSHookFunction(m, (void *)hooked_MGCopyMultipleAnswers, (void **)&orig_MGCopyMultipleAnswers);
-            PXLog(@"[MobileGestalt] ✅ Hooked C function MGCopyMultipleAnswers");
-        } else {
-            PXLog(@"[MobileGestalt] ⚠️ Could not find MGCopyMultipleAnswers");
-        }
-    }
-}
-
-%end
-
-#pragma mark - Initialization
-
 %ctor {
     if (PXHookEnabled(@"devicemodel")) {
-        %init; // Hook ObjC methods
-        %init(PX_mobilegestalt_cfunctions); // Hook C functions
-        PXLog(@"[MobileGestalt] ✅ All hooks initialized");
+        %init;
+        PXLog(@"[MobileGestalt] ✅ ObjC hooks initialized");
     }
 }
