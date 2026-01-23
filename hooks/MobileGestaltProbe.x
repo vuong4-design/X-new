@@ -37,11 +37,10 @@ static BOOL PXShouldLogNSKey(NSString *key) {
 }
 
 static inline BOOL PXProbeEnabled(void) {
-    // Respects your existing Global + Per-app toggles
     return PXHookEnabled(@"mgprobe");
 }
 
-#pragma mark - (A) Wrapper ObjC: MobileGestalt
+#pragma mark - Wrapper ObjC
 
 @interface MobileGestalt : NSObject
 + (id)copyAnswer:(NSString *)key;
@@ -70,7 +69,7 @@ static inline BOOL PXProbeEnabled(void) {
 
 %end
 
-#pragma mark - (B) C API via fishhook: MGCopyAnswer + MGGetBoolAnswer
+#pragma mark - C API via fishhook
 
 static CFTypeRef (*orig_MGCopyAnswer)(CFStringRef property) = NULL;
 static Boolean  (*orig_MGGetBoolAnswer)(CFStringRef property) = NULL;
@@ -89,18 +88,26 @@ static Boolean hook_MGGetBoolAnswer(CFStringRef property) {
     return orig_MGGetBoolAnswer ? orig_MGGetBoolAnswer(property) : false;
 }
 
+static struct rebinding gMGRebindings[2];
+static dispatch_once_t gMGOnce;
+
 %ctor {
     @autoreleasepool {
-        // Always hook wrapper (cheap); logs gated by mgprobe
         %init;
 
-        // Fishhook install (does not patch libMobileGestalt __TEXT)
-        struct rebinding rs[2] = {
-            { "MGCopyAnswer",    (void *)hook_MGCopyAnswer,    (void **)&orig_MGCopyAnswer },
-            { "MGGetBoolAnswer", (void *)hook_MGGetBoolAnswer, (void **)&orig_MGGetBoolAnswer },
-        };
-        rebind_symbols(rs, 2);
-
-        PXLog(@"[MG-PROBE] ✅ Installed probes. Toggle: MG Probe (mgprobe)");
+        dispatch_once(&gMGOnce, ^{
+            gMGRebindings[0] = (struct rebinding){
+                "MGCopyAnswer",
+                (void *)hook_MGCopyAnswer,
+                (void **)&orig_MGCopyAnswer
+            };
+            gMGRebindings[1] = (struct rebinding){
+                "MGGetBoolAnswer",
+                (void *)hook_MGGetBoolAnswer,
+                (void **)&orig_MGGetBoolAnswer
+            };
+            rebind_symbols(gMGRebindings, 2);
+            PXLog(@"[MG-PROBE] ✅ Installed probes (safe static rebindings)");
+        });
     }
 }
