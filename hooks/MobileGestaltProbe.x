@@ -3,7 +3,7 @@
 
 #import "ProjectXLogging.h"
 #import "PXHookOptions.h"
-#import "fishhook.h"
+#import "../libs/fishhook.h"
 
 #pragma mark - Rate limit (log each key once)
 
