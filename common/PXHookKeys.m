@@ -33,6 +33,7 @@ NSArray<NSString *> *PXAllHookKeys(void) {
             PXHookKeyUUID,
             PXHookKeyUserDefaults,
             PXHookKeyWiFi,
+            PXHookKeyMGProbe,
         ];
     });
     return keys;
@@ -44,8 +45,9 @@ NSDictionary<NSString *, NSNumber *> *PXDefaultHookOptions(void) {
     dispatch_once(&onceToken, ^{
         NSMutableDictionary *dict = [NSMutableDictionary dictionary];
         for (NSString *key in PXAllHookKeys()) {
-            dict[key] = @YES; // default: enabled
+            dict[key] = @YES;
         }
+        dict[PXHookKeyMGProbe] = @NO;   // ✅ MG Probe default OFF
         defaults = [dict copy];
     });
     return defaults;
