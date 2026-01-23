@@ -4,6 +4,7 @@ NSString * const PXHookKeyBattery      = @"battery";
 NSString * const PXHookKeyBootTime     = @"boottime";
 NSString * const PXHookKeyCanvas       = @"canvas";
 NSString * const PXHookKeyDeviceModel  = @"devicemodel";
+NSString * const PXHookKeyMGProbe     = @"mgprobe";
 NSString * const PXHookKeyDeviceSpec   = @"devicespec";
 NSString * const PXHookKeyIOSVersion   = @"iosversion";
 NSString * const PXHookKeyNetwork      = @"network";

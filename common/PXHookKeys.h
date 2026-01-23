@@ -9,6 +9,7 @@ extern NSString * const PXHookKeyBattery;
 extern NSString * const PXHookKeyBootTime;
 extern NSString * const PXHookKeyCanvas;
 extern NSString * const PXHookKeyDeviceModel;
+extern NSString * const PXHookKeyMGProbe;
 extern NSString * const PXHookKeyDeviceSpec;
 extern NSString * const PXHookKeyIOSVersion;
 extern NSString * const PXHookKeyNetwork;

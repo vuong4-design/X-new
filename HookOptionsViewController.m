@@ -39,6 +39,7 @@ typedef NS_ENUM(NSInteger, PXSection) {
         @"canvas": @"Canvas Fingerprint",
         @"core": @"Core spoofing",
         @"devicemodel": @"Device Model",
+        @"mgprobe": @"MG Probe",
         @"devicespec": @"Device Specs",
         @"identifier": @"Identifiers",
         @"iosversion": @"iOS Version",
