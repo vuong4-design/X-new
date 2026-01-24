@@ -68,6 +68,7 @@ jobs:
 
       - name: Build
         run: |
+          make clean
           make package ARCHS="$ARCHS" SDKVERSION="$SDKVERSION" TARGET="$TARGET"
 
       - name: Upload build artifacts
